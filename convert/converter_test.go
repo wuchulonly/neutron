@@ -3,6 +3,8 @@ package convert
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestParseToAST(t *testing.T) {
@@ -270,6 +272,73 @@ expression: kw_in_home() || kw_in_server() || favicon_hash()
 	// Should NOT contain xray_hdr_ prefix
 	if strings.Contains(s, "xray_hdr_") {
 		t.Error("output contains xray_hdr_ prefix — should use nuclei variable names")
+	}
+
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	info, _ := doc["info"].(map[string]interface{})
+	metadata, _ := info["metadata"].(map[string]interface{})
+	if metadata["cpe"] != "cpe:2.3:a:apache:tomcat:*:*:*:zh-CN:*:*:*:*" || metadata["vendor"] != "apache" || metadata["product"] != "tomcat" {
+		t.Fatalf("unexpected metadata: %#v", metadata)
+	}
+	alias, _ := doc["alias"].(map[string]interface{})
+	if alias["name"] != "Apache-Tomcat" || alias["vendor"] != "apache" || alias["product"] != "tomcat" {
+		t.Fatalf("unexpected alias: %#v", alias)
+	}
+	aliasMetadata, _ := alias["metadata"].(map[string]interface{})
+	if aliasMetadata["cpe"] != "cpe:2.3:a:apache:tomcat:*:*:*:zh-CN:*:*:*:*" {
+		t.Fatalf("unexpected alias metadata: %#v", aliasMetadata)
+	}
+}
+
+func TestNormalizeCPEForOutput(t *testing.T) {
+	tests := []struct {
+		name        string
+		cpe         string
+		wantCPE     string
+		wantVendor  string
+		wantProduct string
+	}{
+		{"short", "hr_soft:ehr", "cpe:2.3:a:hr_soft:ehr:*:*:*:zh-CN:*:*:*:*", "hr_soft", "ehr"},
+		{"short_with_part", "h:linksys:e2000", "cpe:2.3:h:linksys:e2000:*:*:*:zh-CN:*:*:*:*", "linksys", "e2000"},
+		{"cpe23_short", "cpe:2.3:a:hr 50ft:ehr:*:*:*:*:*:*:*:*", "cpe:2.3:a:hr 50ft:ehr:*:*:*:zh-CN:*:*:*:*", "hr 50ft", "ehr"},
+		{"cpe22", "cpe:/a:nginx:nginx:1.25.0", "cpe:2.3:a:nginx:nginx:1.25.0:*:*:zh-CN:*:*:*:*", "nginx", "nginx"},
+		{"case_insensitive_prefix", "Cpe:2.3:a:jinher_network:jinghe_oa:*:*:*:*:*:*:*:*", "cpe:2.3:a:jinher_network:jinghe_oa:*:*:*:zh-CN:*:*:*:*", "jinher_network", "jinghe_oa"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotCPE, gotVendor, gotProduct := normalizeCPEForOutput(tt.cpe)
+			if gotCPE != tt.wantCPE || gotVendor != tt.wantVendor || gotProduct != tt.wantProduct {
+				t.Fatalf("got cpe=%q vendor=%q product=%q, want cpe=%q vendor=%q product=%q", gotCPE, gotVendor, gotProduct, tt.wantCPE, tt.wantVendor, tt.wantProduct)
+			}
+		})
+	}
+}
+
+func TestDeriveVendorProductFromCPE(t *testing.T) {
+	tests := []struct {
+		name        string
+		cpe         string
+		wantVendor  string
+		wantProduct string
+	}{
+		{"short", "hr_soft:ehr", "hr_soft", "ehr"},
+		{"cpe23", "cpe:2.3:a:hr 50ft:ehr:*:*:*:*:*:*:*:*", "hr 50ft", "ehr"},
+		{"cpe22", "cpe:/a:nginx:nginx:1.25.0", "nginx", "nginx"},
+		{"case_insensitive_prefix", "Cpe:2.3:a:jinher_network:jinghe_oa:*:*:*:*:*:*:*:*", "jinher_network", "jinghe_oa"},
+		{"trim", "  metacrm:metacrm  ", "metacrm", "metacrm"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotVendor, gotProduct := deriveVendorProductFromCPE(tt.cpe)
+			if gotVendor != tt.wantVendor || gotProduct != tt.wantProduct {
+				t.Fatalf("got vendor=%q product=%q, want vendor=%q product=%q", gotVendor, gotProduct, tt.wantVendor, tt.wantProduct)
+			}
+		})
 	}
 }
 

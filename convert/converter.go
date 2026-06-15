@@ -99,14 +99,21 @@ func ConvertPOC(poc *XrayPOC) ([]byte, error) {
 			"name":     poc.Detail.Fingerprint.Name,
 			"author":   "xray-converter",
 			"severity": "info",
-			"tags":     "neutron,xray,converted",
+			"tags":     "neutron,xray,source1,converted",
 		},
 	}
 
 	// Build metadata
 	metadata := map[string]interface{}{}
-	if poc.Detail.Fingerprint.CPE != "" {
-		metadata["cpe"] = poc.Detail.Fingerprint.CPE
+	cpe, vendor, product := normalizeCPEForOutput(poc.Detail.Fingerprint.CPE)
+	if cpe != "" {
+		metadata["cpe"] = cpe
+		if vendor != "" {
+			metadata["vendor"] = vendor
+		}
+		if product != "" {
+			metadata["product"] = product
+		}
 	}
 	if len(poc.Comments.FofaQuery) > 0 {
 		if len(poc.Comments.FofaQuery) == 1 {
@@ -125,6 +132,17 @@ func ConvertPOC(poc *XrayPOC) ([]byte, error) {
 	if len(metadata) > 0 {
 		info := tmpl["info"].(map[string]interface{})
 		info["metadata"] = metadata
+	}
+	if aliasName := strings.TrimSpace(poc.Detail.Fingerprint.Name); aliasName != "" {
+		aliasDoc := map[string]interface{}{
+			"name":    aliasName,
+			"vendor":  vendor,
+			"product": product,
+		}
+		if cpe != "" {
+			aliasDoc["metadata"] = map[string]interface{}{"cpe": cpe}
+		}
+		tmpl["alias"] = aliasDoc
 	}
 
 	ctx := newConversionContext(poc)
@@ -1705,6 +1723,190 @@ func sanitizeID(name string) string {
 	id = strings.Replace(id, "--", "-", -1)
 	id = strings.Replace(id, " ", "-", -1)
 	return strings.ToLower(id)
+}
+
+type normalizedCPEComponents struct {
+	Part      string
+	Vendor    string
+	Product   string
+	Version   string
+	Update    string
+	Edition   string
+	Language  string
+	SWEdition string
+	TargetSW  string
+	TargetHW  string
+	Other     string
+}
+
+func normalizeCPEForOutput(cpe string) (string, string, string) {
+	components, ok := parseCPEForOutput(cpe)
+	if !ok {
+		cpe = strings.TrimSpace(cpe)
+		return cpe, "", ""
+	}
+	normalized := fmt.Sprintf(
+		"cpe:2.3:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
+		components.Part,
+		components.Vendor,
+		components.Product,
+		components.Version,
+		components.Update,
+		components.Edition,
+		components.Language,
+		components.SWEdition,
+		components.TargetSW,
+		components.TargetHW,
+		components.Other,
+	)
+	return normalized, components.Vendor, components.Product
+}
+
+func parseCPEForOutput(cpe string) (normalizedCPEComponents, bool) {
+	cpe = strings.TrimSpace(cpe)
+	if cpe == "" {
+		return normalizedCPEComponents{}, false
+	}
+
+	lower := strings.ToLower(cpe)
+	if strings.HasPrefix(lower, "cpe:2.3:") {
+		parts := strings.Split(cpe, ":")
+		if len(parts) >= 5 {
+			return buildNormalizedCPEComponents(
+				cpeField(parts, 2, "a"),
+				cpeField(parts, 3, ""),
+				cpeField(parts, 4, ""),
+				cpeField(parts, 5, "*"),
+				cpeField(parts, 6, "*"),
+				cpeField(parts, 7, "*"),
+				cpeLanguageField(parts, 8),
+				cpeField(parts, 9, "*"),
+				cpeField(parts, 10, "*"),
+				cpeField(parts, 11, "*"),
+				cpeField(parts, 12, "*"),
+			)
+		}
+		return normalizedCPEComponents{}, false
+	}
+
+	if strings.HasPrefix(lower, "cpe:/") {
+		parts := strings.Split(cpe[len("cpe:/"):], ":")
+		if len(parts) >= 3 {
+			return buildNormalizedCPEComponents(
+				cpeField(parts, 0, "a"),
+				cpeField(parts, 1, ""),
+				cpeField(parts, 2, ""),
+				cpeField(parts, 3, "*"),
+				cpeField(parts, 4, "*"),
+				cpeField(parts, 5, "*"),
+				cpeLanguageField(parts, 6),
+				"*",
+				"*",
+				"*",
+				"*",
+			)
+		}
+		return normalizedCPEComponents{}, false
+	}
+
+	parts := strings.Split(cpe, ":")
+	if len(parts) >= 3 && isCPEPart(parts[0]) {
+		return buildNormalizedCPEComponents(
+			cpeField(parts, 0, "a"),
+			cpeField(parts, 1, ""),
+			cpeField(parts, 2, ""),
+			cpeField(parts, 3, "*"),
+			"*",
+			"*",
+			"zh-CN",
+			"*",
+			"*",
+			"*",
+			"*",
+		)
+	}
+	if len(parts) >= 2 {
+		return buildNormalizedCPEComponents(
+			"a",
+			cpeField(parts, 0, ""),
+			cpeField(parts, 1, ""),
+			cpeField(parts, 2, "*"),
+			"*",
+			"*",
+			"zh-CN",
+			"*",
+			"*",
+			"*",
+			"*",
+		)
+	}
+	return normalizedCPEComponents{}, false
+}
+
+func deriveVendorProductFromCPE(cpe string) (string, string) {
+	_, vendor, product := normalizeCPEForOutput(cpe)
+	return vendor, product
+}
+
+func cpeField(parts []string, index int, fallback string) string {
+	if index >= len(parts) {
+		return fallback
+	}
+	value := strings.TrimSpace(parts[index])
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func cpeLanguageField(parts []string, index int) string {
+	value := cpeField(parts, index, "zh-CN")
+	if value == "*" {
+		return "zh-CN"
+	}
+	return value
+}
+
+func isCPEPart(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "a", "o", "h":
+		return true
+	default:
+		return false
+	}
+}
+
+func buildNormalizedCPEComponents(part, vendor, product, version, update, edition, language, swEdition, targetSW, targetHW, other string) (normalizedCPEComponents, bool) {
+	part = strings.ToLower(strings.TrimSpace(part))
+	if !isCPEPart(part) {
+		part = "a"
+	}
+	vendor = strings.TrimSpace(vendor)
+	product = strings.TrimSpace(product)
+	if vendor == "" || product == "" {
+		return normalizedCPEComponents{}, false
+	}
+	return normalizedCPEComponents{
+		Part:      part,
+		Vendor:    vendor,
+		Product:   product,
+		Version:   cpeDefault(version, "*"),
+		Update:    cpeDefault(update, "*"),
+		Edition:   cpeDefault(edition, "*"),
+		Language:  cpeDefault(language, "zh-CN"),
+		SWEdition: cpeDefault(swEdition, "*"),
+		TargetSW:  cpeDefault(targetSW, "*"),
+		TargetHW:  cpeDefault(targetHW, "*"),
+		Other:     cpeDefault(other, "*"),
+	}, true
+}
+
+func cpeDefault(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func sortedKeys(rules map[string]XrayRule) []string {
