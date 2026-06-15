@@ -41,4 +41,4 @@ info:
         hunter-query: '(header="location: /general/login/index.php" || body="redirectUrl = \"login.php\"") && body="window.opener=\"eoffice\";" || header="location: /eoffice10/client/web/login" || body="/eoffice10/client/web/" && body="eoffice_loading_tip" || body="clsid:FB4EE423-43A4-4AA9-BDE9-4335A6D3C74E" && body="/general/login/index.php?c=Login&a=updateSystem"'
     name: 泛微-EOffice
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

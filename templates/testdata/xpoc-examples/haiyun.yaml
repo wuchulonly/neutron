@@ -16,4 +16,4 @@ info:
         hunter-query: header="/ids/LoginServlet"
     name: 拓尔思-政府网站集约化
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

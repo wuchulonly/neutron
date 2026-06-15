@@ -96,4 +96,4 @@ info:
         hunter-query: body="logo/images/ufida_" || body="/ext-js/images/usg" || body="javascript/bw8.js" || body="var servervendor = 'yonyouupcn" || body="开启u8 cloud云端之旅" || body="用友grp-u8行政事业内控管理软件" || body="getfirstu8accid"
     name: 用友-OA
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

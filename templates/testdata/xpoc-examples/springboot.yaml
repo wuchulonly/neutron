@@ -39,6 +39,6 @@ info:
         hunter-query: '<nil>=="0488faca4c19046b94d07c3ee83cf9d6" || icon_hash="116323821" || body="<h1>Whitelabel Error Page</h1>" || header="set_cookie:" && header="set_cookie: org.springframework.web.servlet.i18n.CookieLocaleResolver" || body="/actuator/info" && body="target=\"_blank\">" || (body="eureka/css/" || body="src=\"eureka/js/") && body="spring-logo-eureka"'
     name: SpringBoot
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted
 variables:
     404Path: '{{rand_text_alphanumeric(16)}}'

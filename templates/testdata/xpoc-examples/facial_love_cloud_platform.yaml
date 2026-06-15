@@ -23,4 +23,4 @@ info:
         hunter-query: body="脸爱云" || body="View/SystemMng/PwdChanges.aspx"
     name: 脸爱云一脸通智慧管理平台
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

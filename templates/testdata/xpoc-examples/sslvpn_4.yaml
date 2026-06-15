@@ -16,4 +16,4 @@ info:
         hunter-query: body="/prx/000/http/"
     name: Array-SSL-VPN
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

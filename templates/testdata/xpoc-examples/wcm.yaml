@@ -28,4 +28,4 @@ info:
         hunter-query: (body="WCMAnt:param=" || body="URL=/wcm") && true
     name: 拓尔思-WCM
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

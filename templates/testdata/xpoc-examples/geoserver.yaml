@@ -27,4 +27,4 @@ info:
         hunter-query: body="org.geoserver.web"
     name: GeoServer
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

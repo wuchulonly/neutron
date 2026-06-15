@@ -13,4 +13,4 @@ info:
         cpe: embedthis:goahead
     name: Embedthis GoAhead
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

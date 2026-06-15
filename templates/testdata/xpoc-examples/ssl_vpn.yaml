@@ -58,4 +58,4 @@ info:
         hunter-query: 'body="1=@@=本地认证=@@=1=@@=本地认证=@@=0=@@=0=@@=0=@@=0" || body="<title>奇安信VPN" || body="请使用手机奇安信ID扫码登录" && body="VPN" || body="<a href=\"sslvpn://\" target=\"_blank\">启动MAC客户端登录</a>" || body="client.href=''itms-services://?action=download-manifest&url=''" || body="网神VPN安全网关系统" || body="var __httpsVerify" && body="Public/resources/mPlugin/mToken.js" || header="set_cookie: mod_pass_param=" && header="set_cookie: portal_param=" && header="set_cookie: client_style="'
     name: 奇安信-SSLVPN
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

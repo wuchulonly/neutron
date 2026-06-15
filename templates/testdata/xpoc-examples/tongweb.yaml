@@ -40,6 +40,6 @@ info:
         hunter-query: (body="/console/rest/i18n?locale=" && body="/console/notinrealm/rest/commons") || <nil>=="0" && status_code="200" && status_code="404"
     name: TongWeb-东方通应用服务器
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted
 variables:
     rStr3: '{{rand_base(8, "abcdefghijklmnopqrstuvwxyz")}}'

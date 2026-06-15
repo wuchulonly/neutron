@@ -29,4 +29,4 @@ info:
         hunter-query: (body="/wp-content/" || body="content=\"WordPress") && (body="/wp-includes/js" || body="id=\"__next\">" && !(body="href=\"/_next/") || body="id=\"__next\"" && body="/wp-json/") || icon_hash="1198047028"
     name: WordPress
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

@@ -27,4 +27,4 @@ info:
         hunter-query: body="/idp/AuthnEngine" || body="./static/config.js" && body="idpUrl" && body="authCenter"
     name: 竹云-IAM
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

@@ -31,4 +31,4 @@ info:
         hunter-query: 'body="defaultroot/themes" && body="defaultroot/scripts" || header="set_cookie: OASESSIONID" && body="defaultroot" || body="window.location" && body="/defaultroot/login.jsp"'
     name: 万户-OA
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

@@ -17,4 +17,4 @@ info:
         hunter-query: body="<p>4.成功登陆ERDS系统。</p>"
     name: 讯投-ERDS
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

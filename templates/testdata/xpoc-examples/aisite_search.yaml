@@ -28,4 +28,4 @@ info:
         hunter-query: body="search/pcRender" && body="pageId" || (body="aisearch" || body="/search/admin/onlySearch.htm")
     name: 中科汇联-AiSearch
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted

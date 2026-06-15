@@ -40,4 +40,4 @@ info:
         hunter-query: body="/bi/?proc=2&action=loadFavicon" && body="/bi/?proc=2&locale=" || () || body="background:url(404.jpg)" && <nil>=="77154f3efafe5b68423507a6658a636a" || icon_hash="398162124" || ()
     name: 永洪-BI
     severity: info
-    tags: neutron,xray,converted
+    tags: neutron,xray,source1,converted
