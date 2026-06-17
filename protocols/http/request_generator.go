@@ -1,7 +1,6 @@
 package http
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -154,7 +153,7 @@ func (r *requestGenerator) Make(baseURL, reqdata string, payloads, dynamicValues
 	if !isRawRequest && strings.HasSuffix(parsed.Path, "/") && strings.Contains(reqdata, "{{BaseURL}}/") {
 		trailingSlash = true
 	}
-	targetValues := generateVariables(parsed, trailingSlash, pathPrefix(r.input))
+	targetValues := generateVariables(parsed, trailingSlash)
 	var globalVars map[string]interface{}
 	if r.input != nil {
 		globalVars = r.input.GlobalVars
@@ -381,7 +380,7 @@ func setHeader(req *http.Request, name, value string) {
 }
 
 // generateVariables will create default variables after parsing a url
-func generateVariables(parsed *url.URL, trailingSlash bool, mountPrefix string) map[string]interface{} {
+func generateVariables(parsed *url.URL, trailingSlash bool) map[string]interface{} {
 	domain := parsed.Host
 	if strings.Contains(parsed.Host, ":") {
 		domain = strings.Split(parsed.Host, ":")[0]
@@ -410,11 +409,8 @@ func generateVariables(parsed *url.URL, trailingSlash bool, mountPrefix string) 
 		base = ""
 	}
 
-	rootURL := fmt.Sprintf("%s://%s%s", parsed.Scheme, parsed.Host, normalizePathPrefix(mountPrefix))
-
 	httpVariables := map[string]interface{}{
 		"BaseURL":  parsed.String(),
-		"RootURL":  rootURL,
 		"Hostname": parsed.Host,
 		"Host":     domain,
 		"Port":     port,
@@ -424,22 +420,4 @@ func generateVariables(parsed *url.URL, trailingSlash bool, mountPrefix string) 
 	}
 
 	return common.MergeMaps(httpVariables, common.GenerateDNVariables(domain))
-}
-
-func pathPrefix(input *protocols.ScanContext) string {
-	if input == nil {
-		return ""
-	}
-	return input.PathPrefix
-}
-
-func normalizePathPrefix(prefix string) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" || prefix == "/" {
-		return ""
-	}
-	if !strings.HasPrefix(prefix, "/") {
-		prefix = "/" + prefix
-	}
-	return strings.TrimRight(prefix, "/")
 }

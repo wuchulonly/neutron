@@ -111,20 +111,12 @@ func mergeCompatibleNodes(nodes []*dsl.Node, topOp string) []*dsl.Node {
 	}
 
 	for _, node := range nodes {
-		if node.Type == dsl.NodeCall &&
-			(node.FuncName == "contains" || node.FuncName == "icontains") &&
-			len(node.Children) == 2 {
-
-			w := literalString(node.Children[1])
-			part := variableToPartWithWord(node.Children[0], w)
-			if part == "" {
-				if currentKey != nil {
-					flush()
-				}
-				result = append(result, node)
-				continue
+		if part, _, ci, ok := containsWordParts(node); ok {
+			fn := "contains"
+			if ci {
+				fn = "icontains"
 			}
-			key := groupKey{fn: node.FuncName, part: part}
+			key := groupKey{fn: fn, part: part}
 
 			if currentKey != nil && *currentKey == key {
 				currentGroup = append(currentGroup, node)
@@ -154,27 +146,18 @@ func nodeToMatcher(node *dsl.Node) *operators.Matcher {
 	}
 
 	// title contains/icontains → regex on body scoped to <title> tag
-	if node.Type == dsl.NodeCall && (node.FuncName == "contains" || node.FuncName == "icontains") && len(node.Children) == 2 {
-		if isTitleVar(node.Children[0]) {
-			word := literalString(node.Children[1])
-			if word != "" {
-				pattern := "(?i)<title>[^<]*" + regexQuote(word) + "[^<]*</title>"
-				return &operators.Matcher{Type: "regex", Part: "body", Regex: []string{pattern}}
-			}
-		}
+	if word, ok := titleContainsWord(node); ok {
+		pattern := "(?i)<title>[^<]*" + regexQuote(word) + "[^<]*</title>"
+		return &operators.Matcher{Type: "regex", Part: "body", Regex: []string{pattern}}
 	}
 
 	// contains/icontains(part, word) → word matcher
-	if node.Type == dsl.NodeCall && (node.FuncName == "contains" || node.FuncName == "icontains") && len(node.Children) == 2 {
-		word := literalString(node.Children[1])
-		part := variableToPartWithWord(node.Children[0], word)
-		if part != "" && word != "" {
-			m := &operators.Matcher{Type: "word", Part: part, Words: []string{word}}
-			if node.FuncName == "icontains" {
-				m.CaseInsensitive = true
-			}
-			return m
+	if part, word, ci, ok := containsWordParts(node); ok {
+		m := &operators.Matcher{Type: "word", Part: part, Words: []string{word}}
+		if ci {
+			m.CaseInsensitive = true
 		}
+		return m
 	}
 
 	// regex(pattern, part) → regex matcher
@@ -299,12 +282,8 @@ func tryMergeWordMatchers(node *dsl.Node) *operators.Matcher {
 	var words []string
 	var ci *bool
 	for _, child := range children {
-		if child.Type != dsl.NodeCall || (child.FuncName != "contains" && child.FuncName != "icontains") || len(child.Children) != 2 {
-			return nil
-		}
-		w := literalString(child.Children[1])
-		p := variableToPartWithWord(child.Children[0], w)
-		if p == "" || w == "" {
+		p, w, icase, ok := containsWordParts(child)
+		if !ok {
 			return nil
 		}
 		if part == "" {
@@ -312,7 +291,6 @@ func tryMergeWordMatchers(node *dsl.Node) *operators.Matcher {
 		} else if part != p {
 			return nil
 		}
-		icase := child.FuncName == "icontains"
 		if ci == nil {
 			ci = &icase
 		} else if *ci != icase {
@@ -441,6 +419,62 @@ func variableToPartWithWord(varNode *dsl.Node, word string) string {
 	return variableToPart(varNode)
 }
 
+func containsWordParts(node *dsl.Node) (part string, word string, caseInsensitive bool, ok bool) {
+	left, right, caseInsensitive, ok := containsCallParts(node)
+	if !ok {
+		return "", "", false, false
+	}
+	word = literalString(right)
+	if word == "" {
+		return "", "", false, false
+	}
+	part = variableToPartWithWord(left, word)
+	if part == "" {
+		return "", "", false, false
+	}
+	return part, word, caseInsensitive, true
+}
+
+func titleContainsWord(node *dsl.Node) (string, bool) {
+	left, right, _, ok := containsCallParts(node)
+	if !ok || !isTitleVar(left) {
+		return "", false
+	}
+	word := literalString(right)
+	return word, word != ""
+}
+
+func containsCallParts(node *dsl.Node) (left *dsl.Node, right *dsl.Node, caseInsensitive bool, ok bool) {
+	if node == nil || node.Type != dsl.NodeCall || len(node.Children) != 2 {
+		return nil, nil, false, false
+	}
+	switch node.FuncName {
+	case "contains":
+	case "icontains":
+		caseInsensitive = true
+	default:
+		return nil, nil, false, false
+	}
+	left = node.Children[0]
+	right = node.Children[1]
+	if unwrapped, lowered := unwrapToLowerCall(left); lowered {
+		left = unwrapped
+		caseInsensitive = true
+	}
+	if unwrapped, lowered := unwrapToLowerCall(right); lowered {
+		right = unwrapped
+		caseInsensitive = true
+	}
+	return left, right, caseInsensitive, true
+}
+
+func unwrapToLowerCall(node *dsl.Node) (*dsl.Node, bool) {
+	if node != nil && node.Type == dsl.NodeCall && node.FuncName == "to_lower" && len(node.Children) == 1 {
+		return node.Children[0], true
+	}
+	return node, false
+}
+
 func isStatusCode(node *dsl.Node) bool {
 	return node.Type == dsl.NodeVariable && node.Value.(string) == "status_code"
 }
@@ -502,14 +536,9 @@ func TransformTitleToBodyRegex(node *dsl.Node) *dsl.Node {
 	if node == nil {
 		return nil
 	}
-	if node.Type == dsl.NodeCall &&
-		(node.FuncName == "contains" || node.FuncName == "icontains") &&
-		len(node.Children) == 2 && isTitleVar(node.Children[0]) {
-		word := literalString(node.Children[1])
-		if word != "" {
-			pattern := "(?i)<title>[^<]*" + regexQuote(word) + "[^<]*</title>"
-			return dsl.Call("regex", dsl.Literal(pattern), dsl.Variable("body"))
-		}
+	if word, ok := titleContainsWord(node); ok {
+		pattern := "(?i)<title>[^<]*" + regexQuote(word) + "[^<]*</title>"
+		return dsl.Call("regex", dsl.Literal(pattern), dsl.Variable("body"))
 	}
 	if node.Type == dsl.NodeBinaryOp && node.Op == "==" && isTitleVar(node.Children[0]) {
 		val := literalString(node.Children[1])

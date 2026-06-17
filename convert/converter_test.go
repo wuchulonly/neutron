@@ -15,11 +15,11 @@ func TestParseToAST(t *testing.T) {
 	}{
 		{"body_contains", `response.body_string.contains("hello")`, `contains(body, "hello")`},
 		{"status_and_body", `response.status == 200 && response.body.contains("test")`, `((status_code == 200) && contains(body, "test"))`},
-		{"header_access", `response.headers["Server"].contains("Apache")`, `contains(server, "Apache")`},
+		{"header_access", `response.headers["Server"].contains("Apache")`, `(contains(all_headers, "server:") && contains(server, "Apache"))`},
 		{"raw_header_contains", `response.raw_header.bcontains(b"X-Jenkins")`, `contains(header, "X-Jenkins")`},
 		{"raw_header_reverse_regex", `"Location: https://example.com".bmatches(response.raw_header)`, `regex("Location: https://example.com", header)`},
 		{"header_in", `"Server" in response.headers`, `contains(all_headers, "server:")`},
-		{"icontains", `response.body.icontains("Test")`, `icontains(body, "Test")`},
+		{"icontains", `response.body.icontains("Test")`, `contains(to_lower(body), "test")`},
 		{"regex", `response.body_string.matches("ver\\d+")`, `regex("ver\\d+", body)`},
 		{"reverse_matches", `"pattern".matches(response.body_string)`, `regex("pattern", body)`},
 		{"favicon", `faviconHash(response.getIconContent()) == -297069493`, `contains(favicon_hash, "-297069493")`},
@@ -30,19 +30,19 @@ func TestParseToAST(t *testing.T) {
 		{"title_to_title", `response.title_string.contains("Login")`, `contains(title, "Login")`},
 		{"string_title_contains", `string(response.title).contains("Sindoh")`, `contains(title, "Sindoh")`},
 		{"literal_contains", `"a".contains("b")`, `contains("a", "b")`},
-		{"cert_subject", `response.cert.issuer.contains("test")`, `icontains(cert_issuer, "test")`},
-		{"cert_time_convert", `timeConvert(response.cert.not_before, "2006-01-02 03:04:05").icontains("2020")`, `icontains(time_convert(cert_not_before, concat("2", "0", "0", "6", "-", "0", "1", "-", "0", "2", " ", "0", "3", ":", "0", "4", ":", "0", "5")), "2020")`},
+		{"cert_subject", `response.cert.issuer.contains("test")`, `contains(to_lower(cert_issuer), "test")`},
+		{"cert_time_convert", `timeConvert(response.cert.not_before, "2006-01-02 03:04:05").icontains("2020")`, `contains(to_lower(time_convert(cert_not_before, concat("2", "0", "0", "6", "-", "0", "1", "-", "0", "2", " ", "0", "3", ":", "0", "4", ":", "0", "5"))), "2020")`},
 		// cert subfields beyond subject/issuer used to be silently dropped; they
 		// now resolve via common.XrayCertFields (the single source of truth).
-		// contains() on cert.* is folded to icontains() because X.509 DN casing
-		// is not semantic (see caseFoldCertMatch).
-		{"cert_dnsnames", `response.cert.dnsnames.contains("ingress-nginx")`, `icontains(cert_dnsnames, "ingress-nginx")`},
-		{"cert_serial", `response.cert.serial.contains("12")`, `icontains(cert_serial, "12")`},
-		{"cert_common_name", `response.cert.common_name.contains("leaf")`, `icontains(cert_common_name, "leaf")`},
-		{"cert_cn_alias", `response.cert.cn.contains("leaf")`, `icontains(cert_common_name, "leaf")`},
-		{"cert_organization", `response.cert.organization.contains("Acme")`, `icontains(cert_organization, "Acme")`},
-		{"cert_org_alias", `response.cert.org.contains("Acme")`, `icontains(cert_organization, "Acme")`},
-		{"cert_icontains_idempotent", `response.cert.issuer.icontains("RG-SMP")`, `icontains(cert_issuer, "RG-SMP")`},
+		// contains() on cert.* is folded to case-insensitive contains because
+		// X.509 DN casing is not semantic (see caseFoldCertMatch).
+		{"cert_dnsnames", `response.cert.dnsnames.contains("ingress-nginx")`, `contains(to_lower(cert_dnsnames), "ingress-nginx")`},
+		{"cert_serial", `response.cert.serial.contains("12")`, `contains(to_lower(cert_serial), "12")`},
+		{"cert_common_name", `response.cert.common_name.contains("leaf")`, `contains(to_lower(cert_common_name), "leaf")`},
+		{"cert_cn_alias", `response.cert.cn.contains("leaf")`, `contains(to_lower(cert_common_name), "leaf")`},
+		{"cert_organization", `response.cert.organization.contains("Acme")`, `contains(to_lower(cert_organization), "acme")`},
+		{"cert_org_alias", `response.cert.org.contains("Acme")`, `contains(to_lower(cert_organization), "acme")`},
+		{"cert_icontains_idempotent", `response.cert.issuer.icontains("RG-SMP")`, `contains(to_lower(cert_issuer), "rg-smp")`},
 		{"raw_cert", `response.raw_cert.bcontains(b"RV042G")`, `contains(raw_cert, "RV042G")`},
 		{"size_to_len", `size(response.body) < 100`, `(len(body) < 100)`},
 		{"bytes_func", `response.body.bcontains(bytes("ITDR"))`, `contains(body, "ITDR")`},
@@ -53,24 +53,23 @@ func TestParseToAST(t *testing.T) {
 		{"arithmetic_string", `response.body.contains(string(r1 * r2))`, `contains(body, to_string(xray_mul(r1, r2)))`},
 		{"concat_string", `response.body.contains("<script>" + string(rand) + "</script>")`, `contains(body, concat(concat("<script>", to_string(rand)), "</script>"))`},
 		{"bstarts_with", `response.body.bstartsWith(bytes("Salted__"))`, `starts_with(body, "Salted__")`},
-		{"version_submatch", `"version\":\"(?P<version>.*)\"".submatch(response.body_string)["version"].versionEqual("8.0.0")`, `xray_version_equal(xray_regex_group("version\":\"(?P<version>.*)\"", body, "version"), "8.0.0")`},
-		{"version_in", `versionIn("Stable tag: (?P<version>[0-9.]+)".submatch(response.body_string)["version"],"<= 5.1.16")`, `xray_version_in(xray_regex_group("Stable tag: (?P<version>[0-9.]+)", body, "version"), "<= 5.1.16")`},
-		{"valid_page", `isValidPage(response)`, `xray_valid_page(status_code, body)`},
+		{"version_submatch", `"version\":\"(?P<version>.*)\"".submatch(response.body_string)["version"].versionEqual("8.0.0")`, `compare_versions(xray_regex_group("version\":\"(?P<version>.*)\"", body, "version"), "=8.0.0")`},
+		{"version_in", `versionIn("Stable tag: (?P<version>[0-9.]+)".submatch(response.body_string)["version"],"<= 5.1.16")`, `compare_versions(xray_regex_group("Stable tag: (?P<version>[0-9.]+)", body, "version"), "<= 5.1.16")`},
+		{"valid_page", `isValidPage(response)`, `(((status_code >= 200) && (status_code < 400)) && (len(trim_space(body)) > 0))`},
 		{"replace_all", `replaceAll(tmp, "\\", "/")`, `replace(tmp, "\\", "/")`},
 		{"randomstr_alias", `response.body.contains("x" + randomstr)`, `contains(body, concat("x", randstr))`},
-		{"sha_alias", `sha(str1, "sha1") + "=" + sha(str2, "sha1")`, `concat(concat(xray_sha(str1, "sha1"), "="), xray_sha(str2, "sha1"))`},
+		{"sha_alias", `sha(str1, "sha1") + "=" + sha(str2, "sha1")`, `concat(concat(sha1(str1), "="), sha1(str2))`},
 		// \xNN hex escape sequences
-		{"hex_escape_0c", `response.body.bcontains(b"\x0c")`, "contains(body, \"\\f\")"},
-		{"hex_escape_gzip", `response.body.bstartsWith(b"\x1F\x8B")`, "starts_with(body, \"\\x1f\\u008b\")"},
-		{"hex_escape_zip", `response.body.bstartsWith(b"PK\x03\x04")`, "starts_with(body, \"PK\\x03\\x04\")"},
-		{"hex_escape_null", `response.body.bcontains(b"SQLite format 3\x00")`, "contains(body, \"SQLite format 3\\x00\")"},
+		{"hex_escape_0c", `response.body.bcontains(b"\x0c")`, `contains(body, hex_decode("0c"))`},
+		{"hex_escape_gzip", `response.body.bstartsWith(b"\x1F\x8B")`, `starts_with(body, hex_decode("1f8b"))`},
+		{"hex_escape_zip", `response.body.bstartsWith(b"PK\x03\x04")`, `starts_with(body, hex_decode("504b0304"))`},
+		{"hex_escape_null", `response.body.bcontains(b"SQLite format 3\x00")`, `contains(body, hex_decode("53514c69746520666f726d6174203300"))`},
 		// triple-quoted raw strings
 		{"triple_quote_regex", `r'''(?i)<input\b.+?type=["']?file['"]?'''.bmatches(response.body)`, "regex(\"(?i)<input\\\\b.+?type=[\\\"\\']?file[\\'\\\"]?\", body)"},
 		// variable-indexed header access
 		{"header_var_access", `response.headers[rHeader].startsWith(r1)`, `contains(all_headers, r1)`},
-		// xray's dir() has no nuclei equivalent — convertFunctionCall expands it
-		// to neutron's replace_regex (NOT regex_replace, which is the upstream
-		// nuclei spelling). Locks the function name against future drift.
+		// xray's dir() has no direct nuclei equivalent; expand it to the
+		// nuclei-compatible replace_regex helper.
 		{"dir_expand", `dir("/static/ueditor.config.js")`, `replace_regex("/static/ueditor.config.js", "/[^/]*$", "/")`},
 		{"dir_expand_concat", `dir("/" + config_path)`, `replace_regex(concat("/", config_path), "/[^/]*$", "/")`},
 	}
@@ -96,6 +95,49 @@ func TestParseUnsupportedCertFieldErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported xray response.cert.fingerprint") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestXrayTemplatePathPreservesRawPath(t *testing.T) {
+	// {{BaseURL}} prefix + raw path; single quotes are no longer escaped since
+	// the path is no longer routed through a govaluate expression.
+	got := xrayTemplatePath("/service/~iufo/a?x=1')WAITFOR%20DELAY%20'0:0:0'--")
+	want := `{{BaseURL}}/service/~iufo/a?x=1')WAITFOR%20DELAY%20'0:0:0'--`
+	if got != want {
+		t.Fatalf("got:  %s\nwant: %s", got, want)
+	}
+}
+
+func TestConvertAliasesXrayPathVariableStartingWithDigit(t *testing.T) {
+	xrayYAML := `
+name: fingerprint-test--numeric-path-variable
+detail:
+  fingerprint:
+    name: Numeric Path Variable
+transport: http
+set:
+  404Path: get404Path()
+rules:
+  r0:
+    request:
+      method: GET
+      path: /{{404Path}}
+    expression: response.status == 404
+expression: r0()
+`
+	out, err := Convert([]byte(xrayYAML))
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "xray_404Path: '{{rand_text_alphanumeric(16)}}'") {
+		t.Fatalf("missing aliased 404Path variable:\n%s", s)
+	}
+	if strings.Contains(s, `concat("/", 404Path)`) || strings.Contains(s, "  404Path:") {
+		t.Fatalf("unaliased 404Path leaked into converted output:\n%s", s)
+	}
+	if !strings.Contains(s, `{{BaseURL}}/{{trim_prefix(xray_404Path, "/")}}`) {
+		t.Fatalf("numeric-leading path variable was not aliased in path expression:\n%s", s)
 	}
 }
 
@@ -139,11 +181,13 @@ func TestExprToMatchers(t *testing.T) {
 			},
 		},
 		{
-			"header_dsl", `response.headers['Server'].contains("Apache")`, 1, "or",
+			"header_dsl", `response.headers['Server'].contains("Apache")`, 2, "and",
 			func(t *testing.T, r *ConvertResult) {
-				m := r.Matchers[0]
-				if m.Type != "dsl" {
-					t.Errorf("expected dsl matcher for individual header, got %+v", m)
+				if r.Matchers[0].Type != "word" || r.Matchers[0].Part != "header" || r.Matchers[0].Words[0] != "server:" {
+					t.Errorf("expected header presence guard, got %+v", r.Matchers[0])
+				}
+				if r.Matchers[1].Type != "dsl" || r.Matchers[1].DSL[0] != `contains(server, "Apache")` {
+					t.Errorf("expected header value DSL matcher, got %+v", r.Matchers[1])
 				}
 			},
 		},
@@ -178,7 +222,7 @@ func TestExprToMatchers(t *testing.T) {
 			"cert_word", `response.cert.issuer.contains("Example Corp")`, 1, "or",
 			func(t *testing.T, r *ConvertResult) {
 				m := r.Matchers[0]
-				if m.Type != "word" || m.Part != "cert_issuer" || !m.CaseInsensitive || m.Words[0] != "Example Corp" {
+				if m.Type != "word" || m.Part != "cert_issuer" || !m.CaseInsensitive || m.Words[0] != "example corp" {
 					t.Errorf("got %+v", m)
 				}
 			},
@@ -383,7 +427,7 @@ expression: payload_rule() || set_rule()
 	if !strings.Contains(s, "payloads:") || !strings.Contains(s, "value:") || !strings.Contains(s, "admin/login") {
 		t.Fatalf("missing converted payload values:\n%s", s)
 	}
-	if !strings.Contains(s, "{{RootURL}}/{{value}}") {
+	if !strings.Contains(s, `{{BaseURL}}/{{trim_prefix(value, "/")}}`) {
 		t.Fatalf("payload placeholder path was not preserved:\n%s", s)
 	}
 }
@@ -604,7 +648,7 @@ expression: discover() && fetch_js()
 		"extractors:",
 		"name: js_path",
 		"internal: true",
-		`{{RootURL}}/{{trim_prefix(js_path, "/")}}`,
+		`{{BaseURL}}/{{trim_prefix(js_path, "/")}}`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("missing %q in converted output:\n%s", want, s)
@@ -644,7 +688,7 @@ expression: upload() && fetch()
 		"name: path_raw",
 		"name: path",
 		`replace(path_raw, "\\", "")`,
-		`{{RootURL}}/{{trim_prefix(path, "/")}}`,
+		`{{BaseURL}}/{{trim_prefix(path, "/")}}`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("missing %q in converted output:\n%s", want, s)
@@ -684,7 +728,7 @@ expression: discover() && follow()
 
 	for _, want := range []string{
 		`location="(?P<nextpath>[\/\w]+)`,
-		`{{RootURL}}/{{trim_prefix(nextpath, "/")}}`,
+		`{{BaseURL}}/{{trim_prefix(nextpath, "/")}}`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("missing %q in converted output:\n%s", want, s)

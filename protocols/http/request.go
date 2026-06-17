@@ -55,8 +55,11 @@ type Request struct {
 	// MaxSize is the maximum size of http response body to read in bytes.
 	MaxSize int `json:"max-size,omitempty" yaml:"max-size,omitempty"`
 
-	// CookieReuse is an optional setting that makes cookies shared within requests
+	// CookieReuse is kept for nuclei template compatibility; cookie reuse is
+	// enabled by default for one scan execution unless DisableCookie is set.
 	CookieReuse bool `json:"cookie-reuse,omitempty" yaml:"cookie-reuse,omitempty"`
+	// DisableCookie disables cookie reuse for this request.
+	DisableCookie bool `json:"disable-cookie,omitempty" yaml:"disable-cookie,omitempty"`
 	// Redirects specifies whether redirects should be followed.
 	Redirects bool `json:"redirects,omitempty" yaml:"redirects,omitempty"`
 	//   This can be used in conjunction with `max-redirects` to control the HTTP request redirects.
@@ -265,6 +268,7 @@ func (r *Request) Compile(options *protocols.ExecuterOptions) error {
 		MaxRedirects:   r.MaxRedirects,
 		RedirectPolicy: policy,
 		CookieReuse:    r.CookieReuse,
+		DisableCookie:  r.DisableCookie,
 		DialContext:    options.Options.DialContext,
 		Proxy:          options.Options.Proxy,
 	}
@@ -523,18 +527,24 @@ func (r *Request) clientForExecution(input *protocols.ScanContext) *http.Client 
 		return input.Client
 	}
 
-	// Inject the per-execution CookieJar from the ScanContext when the
-	// client has no jar yet (i.e. cookie-reuse is false). This matches
-	// nuclei's pattern: each execution context carries its own jar so
-	// redirect chains carry Set-Cookie values, while different executions
-	// stay isolated.
-	if client != nil && client.Jar == nil && input.CookieJar != nil {
-		c := *client
-		c.Jar = input.CookieJar
-		client = &c
+	if client == nil {
+		return nil
+	}
+
+	if !r.DisableCookie && input.CookieJar != nil {
+		return cloneClientWithJar(client, input.CookieJar)
 	}
 
 	return client
+}
+
+func cloneClientWithJar(client *http.Client, jar http.CookieJar) *http.Client {
+	if client == nil || jar == nil {
+		return client
+	}
+	c := *client
+	c.Jar = jar
+	return &c
 }
 
 // responseToDSLMap converts an HTTP response to a map for use in DSL matching
@@ -554,14 +564,16 @@ func (r *Request) responseToDSLMap(req *http.Request, resp *http.Response, host,
 	data["latency"] = float64(duration / time.Millisecond)
 
 	var headerBuilder strings.Builder
+	var normalizedHeaderBuilder strings.Builder
 	for k, v := range resp.Header {
 		joinedValue := strings.Join(v, ", ")
 		headerBuilder.WriteString(fmt.Sprintf("%s: %s\r\n", k, joinedValue))
 		normalizedKey := strings.ToLower(strings.Replace(strings.TrimSpace(k), "-", "_", -1))
 		data[normalizedKey] = strings.Join(v, " ")
-		data["all_headers"] = common.ToString(data["all_headers"]) + fmt.Sprintf("%s: %s\r\n", normalizedKey, joinedValue)
+		normalizedHeaderBuilder.WriteString(fmt.Sprintf("%s: %s\r\n", normalizedKey, joinedValue))
 	}
 	data["header"] = headerBuilder.String()
+	data["all_headers"] = headerBuilder.String() + normalizedHeaderBuilder.String()
 
 	body, _ := readResponseBody(resp)
 	bodyText := string(body)

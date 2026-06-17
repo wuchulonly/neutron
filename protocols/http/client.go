@@ -13,16 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/chainreactors/neutron/protocols"
 )
-
-func init() {
-	protocols.CookieJarFactory = func() http.CookieJar {
-		jar, _ := cookiejar.New(nil)
-		return jar
-	}
-}
 
 var ua = "Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; Trident/5.0;"
 
@@ -31,9 +22,9 @@ var ua = "Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; Trident/5.0;"
 type RedirectPolicy uint8
 
 const (
-	DontFollowRedirect       RedirectPolicy = iota // default — return 3xx as-is
-	FollowAllRedirect                              // follow all redirects
-	FollowSameHostRedirect                         // follow only when host matches the initial request
+	DontFollowRedirect     RedirectPolicy = iota // default — return 3xx as-is
+	FollowAllRedirect                            // follow all redirects
+	FollowSameHostRedirect                       // follow only when host matches the initial request
 )
 
 type Configuration struct {
@@ -41,6 +32,7 @@ type Configuration struct {
 	RedirectPolicy RedirectPolicy
 	MaxRedirects   int
 	CookieReuse    bool
+	DisableCookie  bool
 	Proxy          func(*http.Request) (*url.URL, error)
 	DialContext    func(ctx context.Context, network, address string) (net.Conn, error)
 }
@@ -83,7 +75,7 @@ func createClient(opt *Configuration) *http.Client {
 	}
 
 	var jar *cookiejar.Jar
-	if opt.CookieReuse {
+	if opt.CookieReuse && !opt.DisableCookie {
 		jar = newCookieJar()
 	}
 	client := &http.Client{
