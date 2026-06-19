@@ -151,20 +151,17 @@ func (r *Request) executeTarget(input *protocols.ScanContext, target string, dyn
 	if v := tlsVersionValue(r.MaxVersion); v != 0 {
 		cfg.MaxVersion = v
 	}
-	// When the template explicitly pins a TLS version, widen the cipher list.
-	// Two distinct reasons:
-	//   - TLS 1.1 and below: Go 1.22+ removed most CBC/3DES/RC4 suites from
-	//     `tls.CipherSuites()`. Without `InsecureCipherSuites()` we can't even
-	//     finish a handshake against legacy servers, defeating deprecated-tls
-	//     and weak-cipher-suites templates.
-	//   - TLS 1.2 pinned: the insecure-cipher-suite-detect template enumerates
-	//     RC4/NULL/EXPORT suites on 1.2 servers — we need the same widening
-	//     so we can actually negotiate them when the target offers them.
-	// We DON'T widen when no version is pinned at all (default modern probe):
-	// the default behavior should match a normal HTTPS client.
+	// Offer the full cipher universe (including InsecureCipherSuites) whenever
+	// the template doesn't pin its own list — mirroring nuclei's ctls default,
+	// not a "normal HTTPS client". Two reasons beyond matching nuclei:
+	//   - Go 1.22+ dropped most CBC/3DES/RC4 suites from `tls.CipherSuites()`;
+	//     without `InsecureCipherSuites()` we can't finish a handshake against
+	//     legacy servers, defeating deprecated-tls / weak-cipher-suites templates.
+	//   - insecure-cipher-suite-detect enumerates RC4/NULL/EXPORT suites on 1.2
+	//     servers — the widening is what lets us negotiate them when offered.
 	if len(r.cipherSuites) > 0 {
 		cfg.CipherSuites = append([]uint16(nil), r.cipherSuites...)
-	} else if cfg.MinVersion != 0 || cfg.MaxVersion != 0 {
+	} else {
 		cfg.CipherSuites = append(cfg.CipherSuites, allCipherSuiteIDs()...)
 	}
 
@@ -221,9 +218,9 @@ func (r *Request) dialTLS(target string, cfg *tls.Config) (*tls.Conn, error) {
 }
 
 // responseToDSLMap flattens the leaf certificate and handshake state into DSL
-// keys. Certificate/handshake extraction (both xray cert_* and nuclei style) is
-// delegated to tlsx so the HTTP and SSL paths stay in lockstep; this method only
-// adds the ssl-protocol connection metadata and the `response` JSON summary.
+// keys. Certificate/handshake extraction is delegated to tlsx so the HTTP and
+// SSL paths stay in lockstep; this method only adds the ssl-protocol connection
+// metadata and the `response` JSON summary.
 func (r *Request) responseToDSLMap(data map[string]interface{}, target string, conn *tls.Conn, state *tls.ConnectionState) {
 	host, port := splitHostPort(target)
 	sni := state.ServerName
@@ -231,7 +228,7 @@ func (r *Request) responseToDSLMap(data map[string]interface{}, target string, c
 		sni = host
 	}
 
-	// xray cert_* + nuclei style keys + raw_cert.
+	// nuclei/tlsx certificate and handshake keys.
 	tlsx.FillCertDSL(data, state, sni)
 
 	// Connection-level metadata specific to the ssl protocol.
@@ -250,9 +247,9 @@ func (r *Request) responseToDSLMap(data map[string]interface{}, target string, c
 		}
 	}
 
-	// response: a JSON summary so `part: response` and DSL over the whole
-	// structure work, matching nuclei's default behaviour. Built from the nuclei
-	// field set plus connection metadata — never the binary raw_cert DER.
+		// response: a JSON summary so `part: response` and DSL over the whole
+		// structure work, matching nuclei's default behaviour. Built from the nuclei
+		// field set plus connection metadata.
 	summary := tlsx.NucleiCertFields(state, sni)
 	if summary == nil {
 		summary = map[string]interface{}{}

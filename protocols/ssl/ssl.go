@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chainreactors/neutron/common"
 	"github.com/chainreactors/neutron/operators"
 	"github.com/chainreactors/neutron/protocols"
 )
@@ -45,12 +46,12 @@ type Request struct {
 	CipherSuites []string `json:"cipher_suites,omitempty" yaml:"cipher_suites,omitempty"`
 
 	// The following nuclei ssl options require enumeration behavior or ztls.
-	// They are declared so YAML cannot silently ignore them; Compile rejects
-	// unsupported non-zero values with a clear error.
-	ScanMode       string `json:"scan_mode,omitempty" yaml:"scan_mode,omitempty"`
-	TLSVersionEnum bool   `json:"tls_version_enum,omitempty" yaml:"tls_version_enum,omitempty"`
-	TLSCipherEnum  bool   `json:"tls_cipher_enum,omitempty" yaml:"tls_cipher_enum,omitempty"`
-	TLSCipherTypes bool   `json:"tls_cipher_types,omitempty" yaml:"tls_cipher_types,omitempty"`
+	// They are declared so YAML cannot silently ignore them; Compile soft-degrades
+	// unsupported non-zero values to a single ctls handshake.
+	ScanMode       string   `json:"scan_mode,omitempty" yaml:"scan_mode,omitempty"`
+	TLSVersionEnum bool     `json:"tls_version_enum,omitempty" yaml:"tls_version_enum,omitempty"`
+	TLSCipherEnum  bool     `json:"tls_cipher_enum,omitempty" yaml:"tls_cipher_enum,omitempty"`
+	TLSCipherTypes []string `json:"tls_cipher_types,omitempty" yaml:"tls_cipher_types,omitempty"`
 
 	operators.Operators `json:",inline,omitempty" yaml:",inline,omitempty"`
 
@@ -90,6 +91,13 @@ func (r *Request) validateOptions() error {
 	if r == nil {
 		return fmt.Errorf("ssl request is nil")
 	}
+	// Enumeration-style nuclei ssl options (tls_version_enum, tls_cipher_enum,
+	// tls_cipher_types, scan_mode other than ctls) require tlsx/ztls probing
+	// behavior neutron's stdlib ssl does not implement. Rather than reject the
+	// whole template at Compile time, degrade gracefully: ignore the
+	// enumeration request and run a single handshake so the template still
+	// loads and any cert/cipher assertion can still match. SSLv3 / export
+	// ciphers remain out of scope (needs ztls); see the package doc.
 	var unsupported []string
 	if r.TLSVersionEnum {
 		unsupported = append(unsupported, "tls_version_enum")
@@ -97,14 +105,14 @@ func (r *Request) validateOptions() error {
 	if r.TLSCipherEnum {
 		unsupported = append(unsupported, "tls_cipher_enum")
 	}
-	if r.TLSCipherTypes {
+	if len(r.TLSCipherTypes) > 0 {
 		unsupported = append(unsupported, "tls_cipher_types")
 	}
 	if mode := strings.TrimSpace(r.ScanMode); mode != "" && !strings.EqualFold(mode, "ctls") {
 		unsupported = append(unsupported, "scan_mode="+mode)
 	}
 	if len(unsupported) > 0 {
-		return fmt.Errorf("unsupported nuclei ssl option(s): %s; neutron stdlib ssl supports address, min_version, max_version, scan_mode: ctls, and cipher_suites", strings.Join(unsupported, ", "))
+		common.Debug("ssl: ignoring unsupported option(s) %s (requires upstream tlsx); running single handshake", strings.Join(unsupported, ", "))
 	}
 	if len(r.CipherSuites) == 0 {
 		r.cipherSuites = nil

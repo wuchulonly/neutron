@@ -109,16 +109,21 @@ ssl:
 	}
 }
 
-func TestSSLCompileRejectsUnsupportedNucleiOptions(t *testing.T) {
+func TestSSLCompileDegradesUnsupportedNucleiOptions(t *testing.T) {
+	// Enumeration-style options (tls_version_enum, tls_cipher_enum,
+	// tls_cipher_types, non-ctls scan_mode) are gracefully degraded: Compile
+	// succeeds (a debug line is logged) so nuclei ssl templates that drive
+	// enumeration still load and run a single handshake. Hard errors remain
+	// reserved for genuinely invalid input (unknown cipher, TLS 1.3 pinning).
 	cases := []struct {
-		name string
-		req  Request
-		want string
+		name    string
+		req     Request
+		wantErr string // empty = expect degraded success; non-empty = expect this error substring
 	}{
-		{"version_enum", Request{TLSVersionEnum: true}, "tls_version_enum"},
-		{"cipher_enum", Request{TLSCipherEnum: true}, "tls_cipher_enum"},
-		{"cipher_types", Request{TLSCipherTypes: true}, "tls_cipher_types"},
-		{"ztls_scan_mode", Request{ScanMode: "ztls"}, "scan_mode=ztls"},
+		{"version_enum", Request{TLSVersionEnum: true}, ""},
+		{"cipher_enum", Request{TLSCipherEnum: true}, ""},
+		{"cipher_types", Request{TLSCipherTypes: []string{"insecure"}}, ""},
+		{"ztls_scan_mode", Request{ScanMode: "ztls"}, ""},
 		{"unknown_cipher", Request{CipherSuites: []string{"TLS_FAKE_WITH_NOTHING"}}, "unsupported tls cipher suite"},
 		{"tls13_cipher", Request{CipherSuites: []string{"TLS_AES_128_GCM_SHA256"}}, "not configurable"},
 	}
@@ -126,10 +131,43 @@ func TestSSLCompileRejectsUnsupportedNucleiOptions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.req.Compile(opts)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("expected compile error containing %q, got %v", tc.want, err)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected degraded compile to succeed, got %v", err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected compile error containing %q, got %v", tc.wantErr, err)
+				}
 			}
 		})
+	}
+}
+
+func TestSSLCompileDegradesYAMLTLSCipherTypes(t *testing.T) {
+	var wrapper struct {
+		SSL []*Request `yaml:"ssl"`
+	}
+	raw := `
+ssl:
+  - tls_cipher_enum: true
+    tls_cipher_types:
+      - insecure
+      - weak
+    matchers:
+      - type: dsl
+        dsl:
+          - probe_status == true
+`
+	if err := yaml.Unmarshal([]byte(raw), &wrapper); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(wrapper.SSL) != 1 {
+		t.Fatalf("expected one ssl request: %+v", wrapper.SSL)
+	}
+	opts := &protocols.ExecuterOptions{Options: &protocols.Options{Timeout: 5}}
+	if err := wrapper.SSL[0].Compile(opts); err != nil {
+		t.Fatalf("expected tls_cipher_types to soft-degrade, got %v", err)
 	}
 }
 
@@ -161,25 +199,22 @@ func TestSSLCompileDoesNotFalseRejectRevokedSubstring(t *testing.T) {
 	}
 }
 
-func TestSSLRawCertAndFingerprint(t *testing.T) {
+func TestSSLFingerprintResponse(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 	target := strings.TrimPrefix(server.URL, "https://")
 
-	// raw_cert should carry the org string from the DER, and response should
-	// expose the tlsx-compatible fingerprint_hash object.
+	// response should expose the tlsx-compatible fingerprint_hash object.
 	r := newTestRequest(t, []*operators.Matcher{
-		{Type: "dsl", DSL: []string{`contains(raw_cert, "Acme")`}},
 		{Type: "regex", Part: "response", Regex: []string{`"sha256":"[0-9a-f]{64}"`}},
 	})
-	r.Operators.MatchersCondition = "and"
 	if err := r.CompiledOperators.Compile(); err != nil {
 		t.Fatalf("recompile: %v", err)
 	}
 
 	result := runAgainst(t, r, target)
 	if result == nil || !result.Matched {
-		t.Fatalf("expected raw_cert/fingerprint match against %s, got %+v", target, result)
+		t.Fatalf("expected fingerprint match against %s, got %+v", target, result)
 	}
 }
 
