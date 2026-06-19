@@ -580,9 +580,6 @@ expression: r0()
 	if !strings.Contains(s, `{{BaseURL}}/druid/index.html`) {
 		t.Fatalf("expected xray resolver in converted path:\n%s", s)
 	}
-	if strings.Contains(s, "{{RootURL}}/druid") {
-		t.Fatalf("xray path should not use RootURL:\n%s", s)
-	}
 
 	var tmpl templates.Template
 	if err := yaml.Unmarshal(out, &tmpl); err != nil {

@@ -1517,10 +1517,6 @@ func initialValues(poc *convert.XrayPOC) (map[string]string, map[string]bool) {
 		if s == "" {
 			continue
 		}
-		if isHarnessRootURLExpression(s) {
-			wildcards[k] = true
-			continue
-		}
 		if isHarnessURLValue(s) {
 			wildcards[k] = true
 			continue
@@ -1876,19 +1872,6 @@ func splitConcatExpr(expr string) []string {
 	}
 	parts = append(parts, expr[start:])
 	return parts
-}
-
-func isHarnessRootURLExpression(expr string) bool {
-	compact := strings.Replace(strings.Replace(strings.TrimSpace(expr), " ", "", -1), "'", `"`, -1)
-	switch compact {
-	case `response.url.scheme+"://"+response.url.domain`,
-		`request.url.scheme+"://"+request.url.domain`,
-		`response.url.scheme+"://"+response.url.host`,
-		`request.url.scheme+"://"+request.url.host`:
-		return true
-	default:
-		return false
-	}
 }
 
 func isHarnessURLValue(expr string) bool {
