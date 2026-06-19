@@ -1,26 +1,20 @@
 package common
 
 // XrayCertFields maps an xray `response.cert.<sub>` subfield name to the
-// neutron data-map key that the HTTP response populates. This is the single
-// source of truth shared by the converter (which decides what subfields are
-// evaluable) and the HTTP runtime (which fills the keys). Adding a cert field
-// means adding one entry here plus its extractor in protocols/http.
+// nuclei/tlsx data-map key exposed by the HTTP and SSL runtimes. The converter
+// uses this map so converted templates depend on nuclei-compatible certificate
+// fields instead of neutron-only cert_* aliases.
 //
 // Aliases (e.g. cn -> common_name) may point at the same data key.
 var XrayCertFields = map[string]string{
-	"subject":      "cert_subject",
-	"issuer":       "cert_issuer",
-	"not_before":   "cert_not_before",
-	"not_after":    "cert_not_after",
-	"dnsnames":     "cert_dnsnames",
-	"serial":       "cert_serial",
-	"common_name":  "cert_common_name",
-	"cn":           "cert_common_name",
-	"organization": "cert_organization",
-	"org":          "cert_organization",
+	"subject":      "subject_dn",
+	"issuer":       "issuer_dn",
+	"not_before":   "not_before",
+	"not_after":    "not_after",
+	"dnsnames":     "subject_an",
+	"serial":       "serial",
+	"common_name":  "subject_cn",
+	"cn":           "subject_cn",
+	"organization": "subject_org",
+	"org":          "subject_org",
 }
-
-// RawCertKey is the data-map key holding the concatenated raw DER bytes of the
-// peer certificate chain. xray's `response.raw_cert.bcontains(...)` matches
-// against this (printable strings in DER are stored as literal ASCII).
-const RawCertKey = "raw_cert"

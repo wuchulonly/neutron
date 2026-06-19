@@ -8,11 +8,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/chainreactors/neutron/common"
 )
 
 func sampleState() *tls.ConnectionState {
@@ -37,33 +34,10 @@ func sampleState() *tls.ConnectionState {
 	}
 }
 
-func TestFillCertDSLDualNamespaces(t *testing.T) {
+func TestFillCertDSLNucleiNamespaceOnly(t *testing.T) {
 	data := map[string]interface{}{}
 	FillCertDSL(data, sampleState(), "leaf.example")
 
-	// xray namespace: exact for stable fields, substring for DN strings whose
-	// component ordering is not contractually fixed.
-	exact := map[string]string{
-		"cert_not_before":   "2020-01-02 03:04:05",
-		"cert_dnsnames":     "ingress-nginx leaf.example",
-		"cert_serial":       "4660", // decimal
-		"cert_common_name":  "leaf.example",
-		"cert_organization": "Internet Widgits Pty Ltd",
-	}
-	for k, want := range exact {
-		got, ok := data[k].(string)
-		if !ok || got != want {
-			t.Errorf("%s = %v, want %q", k, data[k], want)
-		}
-	}
-	if s, _ := data["cert_subject"].(string); !strings.Contains(s, "Internet Widgits Pty Ltd") {
-		t.Errorf("cert_subject missing org: %q", s)
-	}
-	if s, _ := data["cert_issuer"].(string); !strings.Contains(s, "issuer-cn") {
-		t.Errorf("cert_issuer missing CN: %q", s)
-	}
-
-	// nuclei namespace (typed).
 	if _, ok := data["not_before"].(time.Time); !ok {
 		t.Errorf("nuclei not_before must be time.Time, got %T", data["not_before"])
 	}
@@ -87,10 +61,14 @@ func TestFillCertDSLDualNamespaces(t *testing.T) {
 		t.Errorf("fingerprint_hash shape wrong: %#v", data["fingerprint_hash"])
 	}
 
-	// raw_cert carries the DER marker for xray bcontains-style matching.
-	raw, ok := data[common.RawCertKey].(string)
-	if !ok || !strings.Contains(raw, "Internet Widgits Pty Ltd") {
-		t.Errorf("raw_cert missing DER marker: %q", raw)
+	for _, key := range []string{
+		"cert_subject", "cert_issuer", "cert_not_before", "cert_not_after",
+		"cert_dnsnames", "cert_serial", "cert_common_name", "cert_organization",
+		"raw_cert", "validity", "trusted",
+	} {
+		if _, ok := data[key]; ok {
+			t.Errorf("non-nuclei compatibility field %q should not be populated: %+v", key, data)
+		}
 	}
 }
 

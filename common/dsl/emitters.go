@@ -5,23 +5,22 @@ import (
 	"strings"
 )
 
-// CertDataKeys lists every cert_* / raw_cert data-map key the converter may
-// surface to emitters. Every Emitter partMap must map each of these
+// CertDataKeys lists every nuclei/tlsx certificate data-map key the converter
+// may surface to emitters. Every Emitter partMap must map each of these
 // explicitly: unmapped cert variables fall through to the header default and
-// get rewritten as `header="cert_xxx: ..."` by isHeaderVariable.
+// get rewritten as header queries by isHeaderVariable.
 //
 // Kept in lockstep with common.XrayCertFields' values via a parity test in
 // the convert/ package (which can import both without a cycle).
 var CertDataKeys = []string{
-	"cert_subject",
-	"cert_issuer",
-	"cert_common_name",
-	"cert_organization",
-	"cert_not_before",
-	"cert_not_after",
-	"cert_dnsnames",
-	"cert_serial",
-	"raw_cert",
+	"subject_dn",
+	"issuer_dn",
+	"subject_cn",
+	"subject_org",
+	"subject_an",
+	"serial",
+	"not_before",
+	"not_after",
 }
 
 // --- FOFA ---
@@ -29,28 +28,26 @@ var CertDataKeys = []string{
 type FOFAEmitter struct{}
 
 var fofaPartMap = map[string]string{
-	"body":              "body",
-	"all_headers":       "header",
-	"header":            "header",
-	"title":             "title",
-	"status_code":       "status_code",
-	"content_type":      "header",
-	"server":            "server",
-	"banner":            "banner",
-	"cert":              "cert",
-	"cert_subject":      "cert.subject",
-	"cert_issuer":       "cert.issuer",
-	"cert_common_name":  "certs_subject_cn",
-	"cert_organization": "certs_subject_org",
-	// fofa has no per-field DNS-SAN / serial / validity cert syntax; fall back
-	// to the whole-certificate substring match. raw_cert.bcontains is
-	// equivalent to fofa cert= so it also maps to the whole-cert field.
-	"cert_dnsnames":   "cert",
-	"cert_serial":     "cert",
-	"cert_not_before": "cert",
-	"cert_not_after":  "cert",
-	"raw_cert":        "cert",
-	"protocol":        "protocol",
+	"body":         "body",
+	"all_headers":  "header",
+	"header":       "header",
+	"title":        "title",
+	"status_code":  "status_code",
+	"content_type": "header",
+	"server":       "server",
+	"banner":       "banner",
+	"cert":         "cert",
+	"subject_dn":   "cert.subject",
+	"issuer_dn":    "cert.issuer",
+	"subject_cn":   "certs_subject_cn",
+	"subject_org":  "certs_subject_org",
+	// fofa has no per-field DNS-SAN / serial / date cert syntax; fall back
+	// to the whole-certificate substring match.
+	"subject_an": "cert",
+	"serial":     "cert",
+	"not_before": "cert",
+	"not_after":  "cert",
+	"protocol":   "protocol",
 }
 
 func (f *FOFAEmitter) Field(part string) string {
@@ -58,7 +55,7 @@ func (f *FOFAEmitter) Field(part string) string {
 		return v
 	}
 	// Unmapped variables (location, set_cookie, x_powered_by, etc.)
-	// are individual header fields from xray conversion. Every cert_* key
+	// are individual header fields from xray conversion. Every cert key
 	// must be explicitly mapped above — see CertDataKeys / parity test.
 	return "header"
 }
@@ -101,17 +98,16 @@ var hunterPartMap = map[string]string{
 	"server":       "server",
 	"banner":       "banner",
 	"cert":         "cert",
-	"cert_subject": "cert.subject",
-	"cert_issuer":  "cert.issuer",
+	"subject_dn":   "cert.subject",
+	"issuer_dn":    "cert.issuer",
 	// hunter has no fine-grained cert subfields; fall back to whole-cert match.
-	"cert_common_name":  "cert",
-	"cert_organization": "cert",
-	"cert_dnsnames":     "cert",
-	"cert_serial":       "cert",
-	"cert_not_before":   "cert",
-	"cert_not_after":    "cert",
-	"raw_cert":          "cert",
-	"protocol":          "protocol",
+	"subject_cn":  "cert",
+	"subject_org": "cert",
+	"subject_an":  "cert",
+	"serial":      "cert",
+	"not_before":  "cert",
+	"not_after":   "cert",
+	"protocol":    "protocol",
 }
 
 func (h *HunterEmitter) Field(part string) string {
@@ -149,28 +145,27 @@ func (h *HunterEmitter) Group(clause string) string   { return "(" + clause + ")
 type CensysEmitter struct{}
 
 var censysPartMap = map[string]string{
-	"body":              "services.http.response.body",
-	"all_headers":       "services.http.response.headers",
-	"header":            "services.http.response.headers",
-	"title":             "services.http.response.html_title",
-	"status_code":       "services.http.response.status_code",
-	"content_type":      "services.http.response.headers.content_type",
-	"server":            "services.http.response.headers.server",
-	"banner":            "services.banner",
-	"cert":              "services.certificate",
-	"cert_subject":      "services.tls.certificates.leaf_data.subject.common_name",
-	"cert_issuer":       "services.tls.certificates.leaf_data.issuer.common_name",
-	"cert_common_name":  "services.tls.certificates.leaf_data.subject.common_name",
-	"cert_organization": "services.tls.certificates.leaf_data.subject.organization",
-	"cert_dnsnames":     "services.tls.certificates.leaf_data.names",
+	"body":         "services.http.response.body",
+	"all_headers":  "services.http.response.headers",
+	"header":       "services.http.response.headers",
+	"title":        "services.http.response.html_title",
+	"status_code":  "services.http.response.status_code",
+	"content_type": "services.http.response.headers.content_type",
+	"server":       "services.http.response.headers.server",
+	"banner":       "services.banner",
+	"cert":         "services.certificate",
+	"subject_dn":   "services.certificate",
+	"issuer_dn":    "services.tls.certificates.leaf_data.issuer.common_name",
+	"subject_cn":   "services.tls.certificates.leaf_data.subject.common_name",
+	"subject_org":  "services.tls.certificates.leaf_data.subject.organization",
+	"subject_an":   "services.tls.certificates.leaf_data.names",
 	// serial / not_before / not_after are not exposed as per-field queries on
 	// censys host records (only the certificates index); fall back to the
 	// whole-certificate field so the value still matches as a substring.
-	"cert_serial":     "services.certificate",
-	"cert_not_before": "services.certificate",
-	"cert_not_after":  "services.certificate",
-	"raw_cert":        "services.certificate",
-	"protocol":        "services.service_name",
+	"serial":     "services.certificate",
+	"not_before": "services.certificate",
+	"not_after":  "services.certificate",
+	"protocol":   "services.service_name",
 }
 
 func (c *CensysEmitter) Field(part string) string {

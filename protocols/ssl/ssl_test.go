@@ -278,6 +278,15 @@ func TestSSLResponseFieldsMatchNucleiShape(t *testing.T) {
 	if got, ok := data["not_before"].(time.Time); !ok || !got.Equal(notBefore) {
 		t.Fatalf("not_before should stay a time.Time: %#v", data["not_before"])
 	}
+	for _, key := range []string{
+		"cert_subject", "cert_issuer", "cert_not_before", "cert_not_after",
+		"cert_dnsnames", "cert_serial", "cert_common_name", "cert_organization",
+		"raw_cert", "validity", "trusted",
+	} {
+		if _, ok := data[key]; ok {
+			t.Fatalf("non-nuclei compatibility field %q should not be populated: %+v", key, data)
+		}
+	}
 
 	var response map[string]interface{}
 	if err := json.Unmarshal([]byte(data["response"].(string)), &response); err != nil {
@@ -289,6 +298,11 @@ func TestSSLResponseFieldsMatchNucleiShape(t *testing.T) {
 	}
 	if response["not_before"] != notBefore.Format(time.RFC3339) {
 		t.Fatalf("response JSON should marshal time as RFC3339: %#v", response["not_before"])
+	}
+	for _, key := range []string{"raw_cert", "validity", "trusted", "cert_subject"} {
+		if _, ok := response[key]; ok {
+			t.Fatalf("response JSON should not include non-nuclei field %q: %#v", key, response)
+		}
 	}
 }
 

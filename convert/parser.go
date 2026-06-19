@@ -29,7 +29,7 @@ func ParseToASTWithAliases(expr string, aliases map[string]string) (*dsl.Node, e
 
 func parseTokensToAST(tokens []xToken) (*dsl.Node, error) {
 	p := &parser{tokens: tokens}
-	node, err := p.parseOr()
+	node, err := p.parseTernary()
 	if err != nil {
 		return nil, err
 	}
@@ -95,6 +95,33 @@ func (p *parser) expect(typ xTokenType) (xToken, error) {
 		return t, fmt.Errorf("expected token type %d, got %d (%q) at pos %d", typ, t.Type, t.Val, p.pos)
 	}
 	return t, nil
+}
+
+// parseTernary handles the xray ternary `cond ? trueExpr : falseExpr`. It sits
+// above parseOr (lowest precedence besides ternary) and is right-associative
+// so `a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`. The resulting
+// NodeTernary is resolved by the converter — nuclei/govaluate cannot evaluate ?:.
+func (p *parser) parseTernary() (*dsl.Node, error) {
+	cond, err := p.parseOr()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Type != xTQuestion {
+		return cond, nil
+	}
+	p.next() // consume '?'
+	trueExpr, err := p.parseTernary()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(xTColon); err != nil {
+		return nil, err
+	}
+	falseExpr, err := p.parseTernary()
+	if err != nil {
+		return nil, err
+	}
+	return dsl.Ternary(cond, trueExpr, falseExpr), nil
 }
 
 func (p *parser) parseOr() (*dsl.Node, error) {
@@ -379,6 +406,9 @@ func (p *parser) parseResponseAccess() (*dsl.Node, error) {
 	case "cert":
 		return p.parseCertAccess()
 
+	case "raw_cert":
+		return nil, fmt.Errorf("unsupported xray response.raw_cert: nuclei ssl/http data does not expose raw peer certificate bytes")
+
 	case "url":
 		return p.consumeUnevaluable()
 
@@ -449,10 +479,8 @@ func (p *parser) parseCertAccess() (*dsl.Node, error) {
 	}
 	field := headerVarName(p.next().Val)
 	// common.XrayCertFields is the single source of truth for which cert
-	// subfields are evaluable; its values are the full data-map keys (already
-	// "cert_"-prefixed) populated by the HTTP/SSL runtime via tlsx.FillCertDSL.
-	// not_before/not_after stay string-valued, so the timeConvert chain is
-	// unaffected.
+	// subfields are evaluable; its values are nuclei/tlsx data-map keys populated
+	// by the HTTP/SSL runtime via tlsx.FillCertDSL.
 	if key, ok := common.XrayCertFields[field]; ok {
 		node, err := p.maybeMethodCall(dsl.Variable(key))
 		if err != nil {
@@ -467,8 +495,7 @@ func (p *parser) parseCertAccess() (*dsl.Node, error) {
 // Certificate field casing (PA-820 vs pa-820, DigiCert vs digicert) is not
 // semantic and varies across CAs/devices, so xray's case-sensitive contains()
 // on cert.* is a common false-negative source; fingerprint practice treats
-// these as case-insensitive. raw_cert (byte matching) is unaffected: it is not a
-// structured field and never reaches here.
+// these as case-insensitive.
 func caseFoldCertMatch(node *dsl.Node) *dsl.Node {
 	if node != nil && node.Type == dsl.NodeCall && node.FuncName == "contains" && len(node.Children) == 2 {
 		if isToLowerCall(node.Children[0]) || isToLowerCall(node.Children[1]) {
@@ -973,10 +1000,20 @@ func isKnownStringVariable(node *dsl.Node) bool {
 	}
 	name, _ := node.Value.(string)
 	if name == "body" || name == "title" || name == "all_headers" ||
-		name == "content_type" || name == common.RawCertKey || strings.HasPrefix(name, "cert_") {
+		name == "content_type" || isNucleiCertStringVariable(name) {
 		return true
 	}
 	return false
+}
+
+func isNucleiCertStringVariable(name string) bool {
+	switch name {
+	case "subject_cn", "subject_dn", "issuer_cn", "issuer_dn", "serial",
+		"sni", "tls_version", "cipher", "tls_connection":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildComparisonNode(left *dsl.Node, op string, right *dsl.Node) *dsl.Node {

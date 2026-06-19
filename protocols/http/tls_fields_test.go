@@ -20,10 +20,8 @@ import (
 )
 
 // TestCertFieldRegistryParity guards the single-source-of-truth invariant:
-// every xray cert key declared in common.XrayCertFields must actually be
-// populated by the shared tlsx.FillCertDSL path that the HTTP runtime uses.
-// This prevents the converter (which decides what cert subfields are evaluable)
-// and the runtime (which fills the keys) from drifting apart.
+// every xray cert accessor that the converter accepts must map to a
+// nuclei/tlsx key populated by the shared FillCertDSL path.
 func TestCertFieldRegistryParity(t *testing.T) {
 	data := map[string]interface{}{}
 	addTLSCertFields(data, newCertTestResponse(t))
@@ -34,21 +32,16 @@ func TestCertFieldRegistryParity(t *testing.T) {
 		}
 	}
 
-	// Guard the xray/nuclei dual-semantics that are easy to break:
-	// cert_not_before stays a formatted string (xray timeConvert depends on it),
-	// while the nuclei not_before stays a time.Time; serial namespaces differ
-	// (xray decimal vs nuclei colon-hex).
-	if _, ok := data["cert_not_before"].(string); !ok {
-		t.Errorf("cert_not_before must stay a string, got %T", data["cert_not_before"])
-	}
 	if _, ok := data["not_before"].(time.Time); !ok {
 		t.Errorf("nuclei not_before must stay a time.Time, got %T", data["not_before"])
 	}
-	if data["cert_serial"] != "4660" {
-		t.Errorf("cert_serial must be decimal, got %v", data["cert_serial"])
-	}
 	if data["serial"] != "12:34" {
 		t.Errorf("nuclei serial must be colon-hex, got %v", data["serial"])
+	}
+	for _, key := range []string{"cert_not_before", "cert_serial", "cert_subject", "raw_cert"} {
+		if _, ok := data[key]; ok {
+			t.Errorf("non-nuclei compatibility field %q should not be populated", key)
+		}
 	}
 }
 
@@ -77,8 +70,8 @@ func newCertTestResponse(t *testing.T) *http.Response {
 }
 
 // TestAddTLSCertFieldsEndToEnd does a real TLS handshake against an httptest
-// server and asserts the SAME http response exposes BOTH the xray cert_* keys
-// and the nuclei-style keys via the shared tlsx path.
+// server and asserts the HTTP response exposes nuclei-style TLS keys via the
+// shared tlsx path.
 func TestAddTLSCertFieldsEndToEnd(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "ok")
@@ -95,16 +88,12 @@ func TestAddTLSCertFieldsEndToEnd(t *testing.T) {
 	data := map[string]interface{}{}
 	addTLSCertFields(data, resp)
 
-	// xray namespace.
-	require.Contains(t, data["cert_organization"], "Acme")
-	require.NotEmpty(t, data["cert_serial"])
-	require.IsType(t, "", data["cert_not_before"], "cert_not_before stays a string")
-	require.NotEmpty(t, data["raw_cert"])
-
-	// nuclei namespace on the same response.
 	require.Contains(t, data["subject_org"], "Acme Co")
 	require.Equal(t, "ctls", data["tls_connection"])
 	require.NotEmpty(t, data["tls_version"])
 	require.IsType(t, time.Time{}, data["not_before"], "nuclei not_before stays a time.Time")
 	require.IsType(t, tlsx.FingerprintHash{}, data["fingerprint_hash"])
+	for _, key := range []string{"cert_organization", "cert_serial", "cert_not_before", "raw_cert"} {
+		require.NotContains(t, data, key)
+	}
 }
