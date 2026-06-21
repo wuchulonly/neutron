@@ -661,6 +661,15 @@ func rewriteTemplatePlaceholders(value string, aliases map[string]string) string
 // normalizeRequestPath, so the emitted template only depends on standard
 // BaseURL/helper evaluation.
 func xrayTemplatePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "{{BaseURL}}"
+	}
+	if strings.HasPrefix(path, "http://") ||
+		strings.HasPrefix(path, "https://") ||
+		strings.HasPrefix(path, "{{BaseURL}}") {
+		return path
+	}
 	return "{{BaseURL}}" + path
 }
 
@@ -671,6 +680,7 @@ func normalizeRequestPath(path string, ctx *conversionContext) string {
 	if ctx == nil {
 		return path
 	}
+	path = rewriteLeadingTemplatePathExpression(path, ctx)
 	for _, match := range slashTemplateExprRE.FindAllStringSubmatch(path, -1) {
 		if len(match) < 2 {
 			continue
@@ -689,12 +699,33 @@ func normalizeRequestPath(path string, ctx *conversionContext) string {
 	return path
 }
 
+func rewriteLeadingTemplatePathExpression(path string, ctx *conversionContext) string {
+	if !strings.HasPrefix(path, "{{") {
+		return path
+	}
+	end := strings.Index(path, "}}")
+	if end < 0 {
+		return path
+	}
+	expr := strings.TrimSpace(path[2:end])
+	if expr == "" || isSlashSafePathExpression(expr) {
+		return path
+	}
+	if simpleTemplateIdentRE.MatchString(expr) {
+		if value, ok := ctx.variables[expr].(string); ok && strings.HasPrefix(value, "/") {
+			ctx.variables[expr] = strings.TrimLeft(value, "/")
+		}
+	}
+	return slashSafePathExpression(expr) + path[end+2:]
+}
+
 func isSlashSafePathExpression(expr string) bool {
-	return strings.HasPrefix(strings.TrimSpace(expr), "trim_prefix(")
+	trimmed := strings.TrimSpace(expr)
+	return strings.HasPrefix(trimmed, "trim_prefix(") || strings.HasPrefix(trimmed, "xray_dedupe_path(")
 }
 
 func slashSafePathExpression(expr string) string {
-	return fmt.Sprintf(`/{{trim_prefix(%s, "/")}}`, expr)
+	return fmt.Sprintf(`/{{xray_dedupe_path(BaseURL, %s)}}`, expr)
 }
 
 func flattenPayloads(root XrayPayloadRoot, aliases map[string]string) map[string][]string {
