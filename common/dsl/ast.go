@@ -15,7 +15,6 @@ const (
 	NodeBinaryOp                 // left && right, left == right
 	NodeUnaryOp                  // !expr
 	NodeCall                     // contains(body, "test")
-	NodeTernary                  // cond ? trueExpr : falseExpr
 )
 
 type Node struct {
@@ -45,8 +44,6 @@ func (n *Node) String() string {
 			args[i] = c.String()
 		}
 		return fmt.Sprintf("%s(%s)", n.FuncName, strings.Join(args, ", "))
-	case NodeTernary:
-		return fmt.Sprintf("(%s ? %s : %s)", n.Children[0], n.Children[1], n.Children[2])
 	}
 	return "?"
 }
@@ -107,15 +104,6 @@ func UnaryOp(op string, operand *Node) *Node {
 }
 func Call(name string, args ...*Node) *Node {
 	return &Node{Type: NodeCall, FuncName: name, Children: args}
-}
-
-// Ternary builds a ternary node (cond ? trueExpr : falseExpr). Ternary is a
-// parse-time construct only: nuclei/govaluate cannot evaluate ?:, so runtime
-// template generation paths must either lower it to supported primitives or
-// reject it. The xray output fallback no longer resolves the false branch to a
-// default literal.
-func Ternary(cond, t, f *Node) *Node {
-	return &Node{Type: NodeTernary, Op: "?:", Children: []*Node{cond, t, f}}
 }
 
 // SuffixVariables deep-clones the AST and appends suffix to all Variable node names.

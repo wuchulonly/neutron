@@ -4,10 +4,14 @@
 // Package tlsx is the single, standard-library-only place that turns a TLS
 // handshake's leaf certificate and connection state into neutron DSL keys.
 //
-// It exposes the nuclei/tlsx certificate namespace (subject_cn, issuer_dn,
-// tls_version, cipher, fingerprint_hash, not_before, ...). The xray converter
-// maps response.cert.* accessors onto those nuclei keys instead of requiring
-// separate cert_* runtime aliases.
+// It deliberately exposes TWO key namespaces from the same certificate so that
+// both template dialects work against the same response:
+//
+//   - xray style  (cert_subject, cert_issuer, cert_not_before, ...): string
+//     values, populated to mirror xray's response.cert.* semantics. These are
+//     what the xray→neutron converter emits.
+//   - nuclei style (subject_cn, issuer_dn, tls_version, cipher, fingerprint_hash,
+//     not_before, ...): richer typed values mirroring nuclei's `ssl` protocol.
 //
 // Both the HTTP runtime (protocols/http) and the SSL protocol (protocols/ssl)
 // call FillCertDSL so the two paths never drift apart again.
@@ -24,7 +28,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/chainreactors/neutron/common"
 )
+
+const xrayTimeLayout = "2006-01-02 03:04:05"
 
 // FingerprintHash holds the leaf certificate fingerprints in the shape nuclei's
 // ssl protocol exposes (a structured object, not flattened keys).
@@ -34,10 +42,10 @@ type FingerprintHash struct {
 	SHA256 string `json:"sha256,omitempty"`
 }
 
-// FillCertDSL populates `data` with the nuclei-style certificate/handshake keys
-// derived from the leaf certificate in `state`. `sni` is the server name used
-// for the mismatch check (the HTTP path passes the request hostname; the SSL
-// path passes its resolved SNI).
+// FillCertDSL populates `data` with both the xray-style cert_* keys and the
+// nuclei-style certificate/handshake keys derived from the leaf certificate in
+// `state`. `sni` is the server name used for the mismatch check (the HTTP path
+// passes the request hostname; the SSL path passes its resolved SNI).
 //
 // It is a no-op when there is no certificate. Connection-level metadata
 // (host/port/matched/ip/response/type) is intentionally left to the caller.
@@ -45,8 +53,34 @@ func FillCertDSL(data map[string]interface{}, state *tls.ConnectionState, sni st
 	if state == nil || len(state.PeerCertificates) == 0 {
 		return
 	}
+	leaf := state.PeerCertificates[0]
+
+	// --- xray style (string values, only set when non-empty to match the
+	// previous protocols/http behaviour) ---
+	setIfNotEmpty(data, "cert_subject", leaf.Subject.String())
+	setIfNotEmpty(data, "cert_issuer", leaf.Issuer.String())
+	setIfNotEmpty(data, "cert_not_before", leaf.NotBefore.Format(xrayTimeLayout))
+	setIfNotEmpty(data, "cert_not_after", leaf.NotAfter.Format(xrayTimeLayout))
+	setIfNotEmpty(data, "cert_dnsnames", strings.Join(leaf.DNSNames, " "))
+	if leaf.SerialNumber != nil {
+		setIfNotEmpty(data, "cert_serial", leaf.SerialNumber.String()) // decimal
+	}
+	setIfNotEmpty(data, "cert_common_name", leaf.Subject.CommonName)
+	setIfNotEmpty(data, "cert_organization", strings.Join(leaf.Subject.Organization, " "))
+
+	// --- nuclei style (typed values, always set, mirroring protocols/ssl) ---
 	for k, v := range NucleiCertFields(state, sni) {
 		data[k] = v
+	}
+
+	// raw_cert: the whole presented chain as concatenated DER, for xray-style
+	// raw_cert.bcontains(...) matching (printable strings in DER are literal ASCII).
+	var raw strings.Builder
+	for _, cert := range state.PeerCertificates {
+		raw.Write(cert.Raw)
+	}
+	if raw.Len() > 0 {
+		data[common.RawCertKey] = raw.String()
 	}
 }
 
@@ -100,6 +134,12 @@ func NucleiCertFields(state *tls.ConnectionState, sni string) map[string]interfa
 		// tool) labels "ctls"; emit the engine name to match nuclei.
 		"tls_connection": "ctls",
 		"probe_status":   true,
+	}
+}
+
+func setIfNotEmpty(data map[string]interface{}, key, value string) {
+	if value != "" {
+		data[key] = value
 	}
 }
 

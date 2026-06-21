@@ -21,9 +21,6 @@ func ExprToMatchers(expr string) (*ConvertResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if containsTernary(ast) {
-		return nil, fmt.Errorf("unsupported xray ternary expression: nuclei DSL cannot evaluate ?:")
-	}
 	ast = TransformBodyFaviconRuntimeFieldsToBody(ast)
 	return astToMatchers(ast), nil
 }
@@ -33,26 +30,8 @@ func ExprToMatchersForFaviconBody(expr string) (*ConvertResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if containsTernary(ast) {
-		return nil, fmt.Errorf("unsupported xray ternary expression: nuclei DSL cannot evaluate ?:")
-	}
 	ast = TransformFaviconRuntimeFieldsToBody(ast)
 	return astToMatchers(ast), nil
-}
-
-func containsTernary(node *dsl.Node) bool {
-	if node == nil {
-		return false
-	}
-	if node.Type == dsl.NodeTernary {
-		return true
-	}
-	for _, child := range node.Children {
-		if containsTernary(child) {
-			return true
-		}
-	}
-	return false
 }
 
 func astToMatchers(node *dsl.Node) *ConvertResult {
@@ -362,10 +341,11 @@ func faviconContains(node *dsl.Node) (string, string, bool) {
 }
 
 // variableToPart maps an AST variable to a matcher part.
-// Body/all_headers and nuclei/tlsx certificate fields map directly. Individual
-// header variables (server, content_type, etc.) deliberately do not map to
-// "header": searching the full header block would false-positive when the word
-// appears in a different header.
+// Body/all_headers map directly. Cert fields and raw_cert are first-class
+// response parts populated by the shared tlsx runtime. Individual header
+// variables (server, content_type, etc.) deliberately do not map to "header":
+// searching the full header block would false-positive when the word appears in
+// a different header.
 func variableToPart(node *dsl.Node) string {
 	if node.Type != dsl.NodeVariable {
 		return ""
@@ -376,12 +356,10 @@ func variableToPart(node *dsl.Node) string {
 		return "body"
 	case "all_headers":
 		return "header"
-	case "subject_cn", "subject_an", "subject_dn", "subject_org",
-		"issuer_cn", "issuer_dn", "issuer_org", "emails", "serial",
-		"not_before", "not_after", "domains", "wildcard_certificate",
-		"self_signed", "expired", "mismatched", "untrusted", "revoked",
-		"sni", "tls_version", "cipher", "fingerprint_hash",
-		"tls_connection", "probe_status":
+	case "raw_cert":
+		return "raw_cert"
+	}
+	if strings.HasPrefix(name, "cert_") {
 		return name
 	}
 	return ""

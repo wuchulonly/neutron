@@ -30,18 +30,20 @@ func TestParseToAST(t *testing.T) {
 		{"title_to_title", `response.title_string.contains("Login")`, `contains(title, "Login")`},
 		{"string_title_contains", `string(response.title).contains("Sindoh")`, `contains(title, "Sindoh")`},
 		{"literal_contains", `"a".contains("b")`, `contains("a", "b")`},
-		{"cert_subject", `response.cert.issuer.contains("test")`, `contains(to_lower(issuer_dn), "test")`},
-		{"cert_time_convert", `timeConvert(response.cert.not_before, "2006-01-02 03:04:05").icontains("2020")`, `contains(to_lower(time_convert(not_before, concat("2", "0", "0", "6", "-", "0", "1", "-", "0", "2", " ", "0", "3", ":", "0", "4", ":", "0", "5"))), "2020")`},
-		// xray response.cert.* accessors map to nuclei/tlsx certificate keys.
+		{"cert_subject", `response.cert.issuer.contains("test")`, `contains(to_lower(cert_issuer), "test")`},
+		{"cert_time_convert", `timeConvert(response.cert.not_before, "2006-01-02 03:04:05").icontains("2020")`, `contains(to_lower(time_convert(cert_not_before, concat("2", "0", "0", "6", "-", "0", "1", "-", "0", "2", " ", "0", "3", ":", "0", "4", ":", "0", "5"))), "2020")`},
+		// cert subfields beyond subject/issuer used to be silently dropped; they
+		// now resolve via common.XrayCertFields (the single source of truth).
 		// contains() on cert.* is folded to case-insensitive contains because
 		// X.509 DN casing is not semantic (see caseFoldCertMatch).
-		{"cert_dnsnames", `response.cert.dnsnames.contains("ingress-nginx")`, `contains(to_lower(subject_an), "ingress-nginx")`},
-		{"cert_serial", `response.cert.serial.contains("12")`, `contains(to_lower(serial), "12")`},
-		{"cert_common_name", `response.cert.common_name.contains("leaf")`, `contains(to_lower(subject_cn), "leaf")`},
-		{"cert_cn_alias", `response.cert.cn.contains("leaf")`, `contains(to_lower(subject_cn), "leaf")`},
-		{"cert_organization", `response.cert.organization.contains("Acme")`, `contains(to_lower(subject_org), "acme")`},
-		{"cert_org_alias", `response.cert.org.contains("Acme")`, `contains(to_lower(subject_org), "acme")`},
-		{"cert_icontains_idempotent", `response.cert.issuer.icontains("RG-SMP")`, `contains(to_lower(issuer_dn), "rg-smp")`},
+		{"cert_dnsnames", `response.cert.dnsnames.contains("ingress-nginx")`, `contains(to_lower(cert_dnsnames), "ingress-nginx")`},
+		{"cert_serial", `response.cert.serial.contains("12")`, `contains(to_lower(cert_serial), "12")`},
+		{"cert_common_name", `response.cert.common_name.contains("leaf")`, `contains(to_lower(cert_common_name), "leaf")`},
+		{"cert_cn_alias", `response.cert.cn.contains("leaf")`, `contains(to_lower(cert_common_name), "leaf")`},
+		{"cert_organization", `response.cert.organization.contains("Acme")`, `contains(to_lower(cert_organization), "acme")`},
+		{"cert_org_alias", `response.cert.org.contains("Acme")`, `contains(to_lower(cert_organization), "acme")`},
+		{"cert_icontains_idempotent", `response.cert.issuer.icontains("RG-SMP")`, `contains(to_lower(cert_issuer), "rg-smp")`},
+		{"raw_cert", `response.raw_cert.bcontains(b"RV042G")`, `contains(raw_cert, "RV042G")`},
 		{"size_to_len", `size(response.body) < 100`, `(len(body) < 100)`},
 		{"bytes_func", `response.body.bcontains(bytes("ITDR"))`, `contains(body, "ITDR")`},
 		{"translate_literal", `response.body.bcontains(b"{{ 'Common.Title' | translate }}")`, `contains(body, "{{ \'Common.Title\' | translate }}")`},
@@ -92,16 +94,6 @@ func TestParseUnsupportedCertFieldErrors(t *testing.T) {
 		t.Fatal("expected unsupported cert field error")
 	}
 	if !strings.Contains(err.Error(), "unsupported xray response.cert.fingerprint") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestParseUnsupportedRawCertErrors(t *testing.T) {
-	_, err := ParseToAST(`response.raw_cert.bcontains(b"RV042G")`)
-	if err == nil {
-		t.Fatal("expected unsupported raw_cert error")
-	}
-	if !strings.Contains(err.Error(), "unsupported xray response.raw_cert") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -212,7 +204,16 @@ func TestExprToMatchers(t *testing.T) {
 			"cert_word", `response.cert.issuer.contains("Example Corp")`, 1, "or",
 			func(t *testing.T, r *ConvertResult) {
 				m := r.Matchers[0]
-				if m.Type != "word" || m.Part != "issuer_dn" || !m.CaseInsensitive || m.Words[0] != "example corp" {
+				if m.Type != "word" || m.Part != "cert_issuer" || !m.CaseInsensitive || m.Words[0] != "example corp" {
+					t.Errorf("got %+v", m)
+				}
+			},
+		},
+		{
+			"raw_cert_word", `response.raw_cert.bcontains(b"RV042G")`, 1, "or",
+			func(t *testing.T, r *ConvertResult) {
+				m := r.Matchers[0]
+				if m.Type != "word" || m.Part != "raw_cert" || m.Words[0] != "RV042G" {
 					t.Errorf("got %+v", m)
 				}
 			},
@@ -264,75 +265,6 @@ func TestExprToMatchersForFaviconBody(t *testing.T) {
 				t.Fatalf("got %+v want DSL %q", m, tt.want)
 			}
 		})
-	}
-}
-
-func TestExprToMatchersRejectsRawCert(t *testing.T) {
-	_, err := ExprToMatchers(`response.raw_cert.bcontains(b"RV042G")`)
-	if err == nil || !strings.Contains(err.Error(), "unsupported xray response.raw_cert") {
-		t.Fatalf("expected raw_cert unsupported error, got %v", err)
-	}
-}
-
-func TestConvertRawCertDoesNotLeakUnsupportedDSL(t *testing.T) {
-	xrayYAML := `
-name: raw-cert-unsupported
-transport: http
-rules:
-  r0:
-    request:
-      method: GET
-      path: /
-    expression: response.raw_cert.bcontains(b"RV042G")
-expression: r0()
-`
-	out, err := Convert([]byte(xrayYAML))
-	if err != nil {
-		t.Fatalf("convert: %v", err)
-	}
-	s := string(out)
-	if strings.Contains(s, "response.raw_cert") || strings.Contains(s, "raw_cert") {
-		t.Fatalf("unsupported raw_cert leaked into converted template:\n%s", s)
-	}
-	if !strings.Contains(s, "- \"false\"") && !strings.Contains(s, "- 'false'") && !strings.Contains(s, "- false") {
-		t.Fatalf("expected unsupported raw_cert to be lowered to false matcher:\n%s", s)
-	}
-}
-
-func TestConvertReqConditionRawCertDoesNotLeakUnsupportedDSL(t *testing.T) {
-	xrayYAML := `
-name: raw-cert-req-condition-unsupported
-transport: http
-rules:
-  body_rule:
-    request:
-      method: GET
-      path: /body
-    expression: response.body.contains("ok")
-  cert_rule:
-    request:
-      method: GET
-      path: /cert
-    expression: response.raw_cert.bcontains(b"RV042G")
-expression: body_rule() && cert_rule()
-`
-	out, err := Convert([]byte(xrayYAML))
-	if err != nil {
-		t.Fatalf("convert: %v", err)
-	}
-	s := string(out)
-	if strings.Contains(s, "response.raw_cert") || strings.Contains(s, "raw_cert") {
-		t.Fatalf("unsupported raw_cert leaked into req-condition template:\n%s", s)
-	}
-	if !strings.Contains(s, "&& false") {
-		t.Fatalf("expected unsupported req-condition raw_cert to be lowered to false:\n%s", s)
-	}
-}
-
-func TestExprToMatchersRejectsTernary(t *testing.T) {
-	_, err := ExprToMatchers(`response.status == 200 ? response.body.contains("ok") : response.body.contains("fail")`)
-	if err == nil || !strings.Contains(err.Error(), "unsupported xray ternary") {
-		t.Fatalf("expected ternary unsupported error, got %v", err)
 	}
 }
 

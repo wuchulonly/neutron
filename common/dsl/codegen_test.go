@@ -198,13 +198,13 @@ func TestGenerateNewFields(t *testing.T) {
 			`services.certificate: "Let's Encrypt"`,
 		},
 		{
-			`contains(subject_cn, "Example Corp")`,
-			`certs_subject_cn="Example Corp"`,
-			`cert="Example Corp"`,
+			`contains(cert_subject, "Example Corp")`,
+			`cert.subject="Example Corp"`,
+			`cert.subject="Example Corp"`,
 			`services.tls.certificates.leaf_data.subject.common_name: "Example Corp"`,
 		},
 		{
-			`contains(issuer_dn, "DigiCert")`,
+			`contains(cert_issuer, "DigiCert")`,
 			`cert.issuer="DigiCert"`,
 			`cert.issuer="DigiCert"`,
 			`services.tls.certificates.leaf_data.issuer.common_name: "DigiCert"`,

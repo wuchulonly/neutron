@@ -504,13 +504,7 @@ func buildReqConditionBlocks(poc *XrayPOC, groups []*requestGroup, topExpr *TopE
 func reqConditionRuleDSL(expr string) string {
 	ast, err := ParseToAST(expr)
 	if err != nil {
-		if converterErrorHasNoRuntimeFallback(err) {
-			return "false"
-		}
 		return expr
-	}
-	if containsTernary(ast) {
-		return "false"
 	}
 	ast = TransformTitleToBodyRegex(ast)
 	ast = TransformBodyFaviconRuntimeFieldsToBody(ast)
@@ -832,6 +826,9 @@ func convertSetVariables(set map[string]interface{}, aliases map[string]string) 
 		if value == "" {
 			continue
 		}
+		if key == "RootURL" && isRootURLSetExpression(value) {
+			continue
+		}
 		outKey := aliasVariableName(key, aliases)
 		vars[outKey] = translateXraySetExpression(value, aliases)
 	}
@@ -848,8 +845,22 @@ func convertSetVariables(set map[string]interface{}, aliases map[string]string) 
 	return vars, orderSetVariables(vars)
 }
 
+func isRootURLSetExpression(expr string) bool {
+	compact := strings.Replace(strings.Replace(strings.TrimSpace(expr), " ", "", -1), "'", `"`, -1)
+	switch compact {
+	case `response.url.scheme+"://"+response.url.domain`,
+		`request.url.scheme+"://"+request.url.domain`,
+		`response.url.scheme+"://"+response.url.host`,
+		`request.url.scheme+"://"+request.url.host`:
+		return true
+	default:
+		return false
+	}
+}
+
 var neutronBuiltinVariableNames = map[string]bool{
 	"BaseURL":  true,
+	"RootURL":  true,
 	"Hostname": true,
 	"Host":     true,
 	"Port":     true,
@@ -876,7 +887,11 @@ func collectVariableNames(poc *XrayPOC) map[string]bool {
 	if poc == nil {
 		return names
 	}
-	for key := range poc.Set {
+	for key, raw := range poc.Set {
+		value := strings.TrimSpace(fmt.Sprint(raw))
+		if key == "RootURL" && isRootURLSetExpression(value) {
+			continue
+		}
 		names[key] = true
 	}
 	for _, rule := range poc.Rules {
@@ -1208,6 +1223,15 @@ func outputExtractors(output map[string]interface{}, ctx *conversionContext) []i
 				extractor["part"] = spec.Part
 			}
 			extractors = append(extractors, extractor)
+
+			if fallback, ok := outputFallbackLiteral(expr); ok {
+				if ctx.variables == nil {
+					ctx.variables = map[string]interface{}{}
+				}
+				if _, exists := ctx.variables[outName]; !exists {
+					ctx.variables[outName] = normalizeXrayScalar(fallback)
+				}
+			}
 			continue
 		}
 
@@ -1469,6 +1493,34 @@ func outputSourceReference(expr string) (string, string, bool) {
 	return "", "", false
 }
 
+func outputFallbackLiteral(expr string) (string, bool) {
+	tokens, err := xrayLex(expr)
+	if err != nil {
+		return "", false
+	}
+	hasQuestion := false
+	depth := 0
+	for i, tok := range tokens {
+		switch tok.Type {
+		case xTLParen, xTLBracket:
+			depth++
+		case xTRParen, xTRBracket:
+			if depth > 0 {
+				depth--
+			}
+		case xTQuestion:
+			if depth == 0 {
+				hasQuestion = true
+			}
+		case xTColon:
+			if hasQuestion && depth == 0 && i+1 < len(tokens) && tokens[i+1].Type == xTString {
+				return tokens[i+1].Val, true
+			}
+		}
+	}
+	return "", false
+}
+
 func regexGroupIndex(pattern, groupName string) int {
 	if groupName == "" {
 		return 1
@@ -1703,12 +1755,6 @@ func convertGroupWithOptions(method, path string, headers map[string]string, bod
 		result, err = ExprToMatchersForFaviconBody(combined)
 	}
 	if err != nil {
-		if converterErrorHasNoRuntimeFallback(err) {
-			req["matchers"] = []map[string]interface{}{
-				{"type": "dsl", "dsl": []string{"false"}},
-			}
-			return req
-		}
 		req["matchers"] = []map[string]interface{}{
 			{"type": "dsl", "dsl": []string{combined}},
 		}
@@ -1741,19 +1787,7 @@ func faviconBodyExpression(expr string) string {
 	if err != nil {
 		return expr
 	}
-	if containsTernary(ast) {
-		return expr
-	}
 	return TransformFaviconRuntimeFieldsToBody(ast).String()
-}
-
-func converterErrorHasNoRuntimeFallback(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "unsupported xray response.raw_cert") ||
-		strings.Contains(msg, "unsupported xray ternary")
 }
 
 func matcherToMap(m *operators.Matcher) map[string]interface{} {

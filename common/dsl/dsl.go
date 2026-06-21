@@ -446,15 +446,9 @@ func registerDefaultFunctions() {
 		return strings.Contains(toString(args[0]), toString(args[1])), nil
 	}))
 	MustAddFunction(NewWithPositionalArgs("time_convert", 2, false, func(args ...interface{}) (interface{}, error) {
-		layout := strings.TrimSpace(toString(args[1]))
-		if layout == "" {
-			return args[0], nil
-		}
-		if t, ok := args[0].(time.Time); ok {
-			return t.Format(layout), nil
-		}
 		value := strings.TrimSpace(toString(args[0]))
-		if value == "" {
+		layout := strings.TrimSpace(toString(args[1]))
+		if value == "" || layout == "" {
 			return value, nil
 		}
 		for _, inputLayout := range []string{

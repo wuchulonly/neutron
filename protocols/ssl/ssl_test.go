@@ -109,21 +109,16 @@ ssl:
 	}
 }
 
-func TestSSLCompileDegradesUnsupportedNucleiOptions(t *testing.T) {
-	// Enumeration-style options (tls_version_enum, tls_cipher_enum,
-	// tls_cipher_types, non-ctls scan_mode) are gracefully degraded: Compile
-	// succeeds (a debug line is logged) so nuclei ssl templates that drive
-	// enumeration still load and run a single handshake. Hard errors remain
-	// reserved for genuinely invalid input (unknown cipher, TLS 1.3 pinning).
+func TestSSLCompileRejectsUnsupportedNucleiOptions(t *testing.T) {
 	cases := []struct {
-		name    string
-		req     Request
-		wantErr string // empty = expect degraded success; non-empty = expect this error substring
+		name string
+		req  Request
+		want string
 	}{
-		{"version_enum", Request{TLSVersionEnum: true}, ""},
-		{"cipher_enum", Request{TLSCipherEnum: true}, ""},
-		{"cipher_types", Request{TLSCipherTypes: []string{"insecure"}}, ""},
-		{"ztls_scan_mode", Request{ScanMode: "ztls"}, ""},
+		{"version_enum", Request{TLSVersionEnum: true}, "tls_version_enum"},
+		{"cipher_enum", Request{TLSCipherEnum: true}, "tls_cipher_enum"},
+		{"cipher_types", Request{TLSCipherTypes: true}, "tls_cipher_types"},
+		{"ztls_scan_mode", Request{ScanMode: "ztls"}, "scan_mode=ztls"},
 		{"unknown_cipher", Request{CipherSuites: []string{"TLS_FAKE_WITH_NOTHING"}}, "unsupported tls cipher suite"},
 		{"tls13_cipher", Request{CipherSuites: []string{"TLS_AES_128_GCM_SHA256"}}, "not configurable"},
 	}
@@ -131,43 +126,10 @@ func TestSSLCompileDegradesUnsupportedNucleiOptions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.req.Compile(opts)
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatalf("expected degraded compile to succeed, got %v", err)
-				}
-			} else {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("expected compile error containing %q, got %v", tc.wantErr, err)
-				}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected compile error containing %q, got %v", tc.want, err)
 			}
 		})
-	}
-}
-
-func TestSSLCompileDegradesYAMLTLSCipherTypes(t *testing.T) {
-	var wrapper struct {
-		SSL []*Request `yaml:"ssl"`
-	}
-	raw := `
-ssl:
-  - tls_cipher_enum: true
-    tls_cipher_types:
-      - insecure
-      - weak
-    matchers:
-      - type: dsl
-        dsl:
-          - probe_status == true
-`
-	if err := yaml.Unmarshal([]byte(raw), &wrapper); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(wrapper.SSL) != 1 {
-		t.Fatalf("expected one ssl request: %+v", wrapper.SSL)
-	}
-	opts := &protocols.ExecuterOptions{Options: &protocols.Options{Timeout: 5}}
-	if err := wrapper.SSL[0].Compile(opts); err != nil {
-		t.Fatalf("expected tls_cipher_types to soft-degrade, got %v", err)
 	}
 }
 
@@ -199,22 +161,25 @@ func TestSSLCompileDoesNotFalseRejectRevokedSubstring(t *testing.T) {
 	}
 }
 
-func TestSSLFingerprintResponse(t *testing.T) {
+func TestSSLRawCertAndFingerprint(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 	target := strings.TrimPrefix(server.URL, "https://")
 
-	// response should expose the tlsx-compatible fingerprint_hash object.
+	// raw_cert should carry the org string from the DER, and response should
+	// expose the tlsx-compatible fingerprint_hash object.
 	r := newTestRequest(t, []*operators.Matcher{
+		{Type: "dsl", DSL: []string{`contains(raw_cert, "Acme")`}},
 		{Type: "regex", Part: "response", Regex: []string{`"sha256":"[0-9a-f]{64}"`}},
 	})
+	r.Operators.MatchersCondition = "and"
 	if err := r.CompiledOperators.Compile(); err != nil {
 		t.Fatalf("recompile: %v", err)
 	}
 
 	result := runAgainst(t, r, target)
 	if result == nil || !result.Matched {
-		t.Fatalf("expected fingerprint match against %s, got %+v", target, result)
+		t.Fatalf("expected raw_cert/fingerprint match against %s, got %+v", target, result)
 	}
 }
 
@@ -278,15 +243,6 @@ func TestSSLResponseFieldsMatchNucleiShape(t *testing.T) {
 	if got, ok := data["not_before"].(time.Time); !ok || !got.Equal(notBefore) {
 		t.Fatalf("not_before should stay a time.Time: %#v", data["not_before"])
 	}
-	for _, key := range []string{
-		"cert_subject", "cert_issuer", "cert_not_before", "cert_not_after",
-		"cert_dnsnames", "cert_serial", "cert_common_name", "cert_organization",
-		"raw_cert", "validity", "trusted",
-	} {
-		if _, ok := data[key]; ok {
-			t.Fatalf("non-nuclei compatibility field %q should not be populated: %+v", key, data)
-		}
-	}
 
 	var response map[string]interface{}
 	if err := json.Unmarshal([]byte(data["response"].(string)), &response); err != nil {
@@ -298,11 +254,6 @@ func TestSSLResponseFieldsMatchNucleiShape(t *testing.T) {
 	}
 	if response["not_before"] != notBefore.Format(time.RFC3339) {
 		t.Fatalf("response JSON should marshal time as RFC3339: %#v", response["not_before"])
-	}
-	for _, key := range []string{"raw_cert", "validity", "trusted", "cert_subject"} {
-		if _, ok := response[key]; ok {
-			t.Fatalf("response JSON should not include non-nuclei field %q: %#v", key, response)
-		}
 	}
 }
 

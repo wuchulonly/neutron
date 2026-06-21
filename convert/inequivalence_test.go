@@ -176,12 +176,12 @@ func TestCertConstraintPreservedInAnd(t *testing.T) {
 	}
 	found := false
 	for _, m := range result.Matchers {
-		if m.Type == "word" && m.Part == "issuer_dn" && m.CaseInsensitive {
+		if m.Type == "word" && m.Part == "cert_issuer" && m.CaseInsensitive {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("issuer_dn matcher missing: %+v", result.Matchers)
+		t.Fatalf("cert_issuer matcher missing: %+v", result.Matchers)
 	}
 }
 

@@ -9,11 +9,13 @@ import (
 
 // TestCertRegistryParity guards the single-source-of-truth invariant between
 // common.XrayCertFields (which decides what xray cert subfields are
-// evaluable) and dsl.CertDataKeys (the nuclei/tlsx keys every Emitter partMap
-// is required to map explicitly).
+// evaluable) and dsl.CertDataKeys (the keys every Emitter partMap is
+// required to map explicitly).
 //
-// Any cert key that is NOT explicitly mapped silently falls into the header
-// default and gets rewritten as a header query by isHeaderVariable. This test
+// The Emitter Field() fallback used to catch unmapped cert_* via a
+// strings.HasPrefix("cert") branch; removing that branch means any cert key
+// that is NOT explicitly mapped silently falls into the header default and
+// gets rewritten as `header="cert_xxx: ..."` by isHeaderVariable. This test
 // makes that drift loud.
 func TestCertRegistryParity(t *testing.T) {
 	declared := make(map[string]bool, len(dsl.CertDataKeys))
@@ -28,7 +30,13 @@ func TestCertRegistryParity(t *testing.T) {
 		}
 	}
 
-	// 2. Every dsl.CertDataKeys entry must resolve to a non-default field on
+	// 2. raw_cert (response.raw_cert.bcontains) must also be listed: it
+	// reaches the emitter as a NodeVariable just like the other cert keys.
+	if !declared[common.RawCertKey] {
+		t.Errorf("common.RawCertKey = %q missing from dsl.CertDataKeys", common.RawCertKey)
+	}
+
+	// 3. Every dsl.CertDataKeys entry must resolve to a non-default field on
 	// every emitter — otherwise it would be misclassified as a header
 	// variable (see isHeaderVariable in codegen.go).
 	for _, platform := range []string{"fofa", "hunter", "censys"} {
