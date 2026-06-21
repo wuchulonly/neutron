@@ -18,7 +18,8 @@ import (
 var ua = "Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; Trident/5.0;"
 
 // RedirectPolicy controls how the HTTP client follows redirects, mirroring
-// nuclei's RedirectFlow semantics.
+// nuclei's RedirectFlow behavior. The named values are the contract; their
+// numeric iota values are intentionally not used as a serialized format.
 type RedirectPolicy uint8
 
 const (
