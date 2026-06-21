@@ -3,23 +3,19 @@ package http
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/chainreactors/neutron/common"
-	"github.com/chainreactors/neutron/operators"
-	"github.com/chainreactors/neutron/protocols"
-	"github.com/spaolacci/murmur3"
 	"html"
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
+
+	"github.com/chainreactors/neutron/common"
+	"github.com/chainreactors/neutron/operators"
+	"github.com/chainreactors/neutron/protocols"
 )
 
 var errStopExecution = errors.New("stop execution due to unresolved variables")
@@ -124,21 +120,6 @@ func (r *Request) Match(data map[string]interface{}, matcher *operators.Matcher)
 		return matcher.ResultWithMatchedSnippet(matcher.MatchBinary(item))
 	case operators.DSLMatcher:
 		return matcher.Result(matcher.MatchDSL(data)), nil
-	case operators.FaviconMatcher:
-		if matcher.Part == "favicon_hash" || matcher.Part == "body_favicon_hash" {
-			return matcher.ResultWithMatchedSnippet(matcher.MatchHashValues(strings.Fields(item)))
-		}
-		// Favicon data should be provided in the data map under "favicon" key
-		// Expected format: map[string]interface{} where keys are URLs and values are hash arrays
-		faviconData, ok := data["favicon"]
-		if !ok {
-			return false, []string{}
-		}
-		faviconMap, ok := faviconData.(map[string]interface{})
-		if !ok {
-			return false, []string{}
-		}
-		return matcher.ResultWithMatchedSnippet(matcher.MatchFavicon(faviconMap))
 	default:
 		return matcher.ResultWithMatchedSnippet(matcher.MatchWithHandler(item, data))
 	}
@@ -454,7 +435,7 @@ func (r *Request) executeRequest(input *protocols.ScanContext, request *generate
 		}
 	}
 	finalEvent := make(map[string]interface{})
-	outputEvent := r.responseToDSLMap(request.request, resp, input.Input, matchedURL, duration, request.dynamicValues, reqBody, client)
+	outputEvent := r.responseToDSLMap(request.request, resp, input.Input, matchedURL, duration, request.dynamicValues, reqBody)
 	for k, v := range previousEvent {
 		finalEvent[k] = v
 	}
@@ -548,7 +529,7 @@ func cloneClientWithJar(client *http.Client, jar http.CookieJar) *http.Client {
 }
 
 // responseToDSLMap converts an HTTP response to a map for use in DSL matching
-func (r *Request) responseToDSLMap(req *http.Request, resp *http.Response, host, matched string, duration time.Duration, extra map[string]interface{}, reqBody []byte, client *http.Client) protocols.InternalEvent {
+func (r *Request) responseToDSLMap(req *http.Request, resp *http.Response, host, matched string, duration time.Duration, extra map[string]interface{}, reqBody []byte) protocols.InternalEvent {
 	data := make(protocols.InternalEvent, 12+len(extra)+len(resp.Header)+len(resp.Cookies()))
 	for k, v := range extra {
 		data[k] = v
@@ -612,13 +593,6 @@ func (r *Request) responseToDSLMap(req *http.Request, resp *http.Response, host,
 	if r.StopAtFirstMatch {
 		data["stop-at-first-match"] = true
 	}
-	if r.NeedsFaviconData() || r.NeedsRequestCondition() {
-		faviconReq := req
-		if resp != nil && resp.Request != nil && resp.Request.URL != nil {
-			faviconReq = resp.Request
-		}
-		r.populateFaviconData(data, faviconReq, body, client)
-	}
 	return data
 }
 
@@ -677,72 +651,6 @@ func (request *Request) NeedsRequestCondition() bool {
 	return false
 }
 
-func (request *Request) NeedsFaviconData() bool {
-	for _, matcher := range request.Matchers {
-		if matcher.Type == "favicon" || matcher.Part == "favicon_hash" || matcher.Part == "body_favicon_hash" {
-			return true
-		}
-		if checkFaviconExpressions(matcher.DSL...) {
-			return true
-		}
-	}
-	return false
-}
-
-func checkFaviconExpressions(expressions ...string) bool {
-	for _, expression := range expressions {
-		if strings.Contains(expression, "favicon_hash") ||
-			strings.Contains(expression, "body_favicon_hash") ||
-			strings.Contains(expression, "favicon_content") {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *Request) populateFaviconData(data protocols.InternalEvent, req *http.Request, body []byte, client *http.Client) {
-	if req == nil || req.URL == nil {
-		return
-	}
-
-	faviconData := map[string]interface{}{}
-	bodyHash := xrayFaviconHash(body)
-	if bodyHash != "" {
-		data["body_favicon_hash"] = bodyHash
-		faviconData[req.URL.String()] = []string{bodyHash}
-	}
-
-	hashes := map[string]struct{}{}
-	for _, iconURL := range discoverIconURLs(req.URL, string(body)) {
-		var iconHashes []string
-		var iconBody []byte
-		if iconURL == req.URL.String() {
-			iconBody = body
-			iconHashes = faviconHashes(iconBody)
-		} else if fetchedBody, ok := r.fetchFavicon(req, iconURL, client); ok {
-			iconBody = fetchedBody
-			iconHashes = faviconHashes(iconBody)
-		}
-		if len(iconHashes) == 0 {
-			continue
-		}
-		if _, ok := data["favicon_content"]; !ok && len(iconBody) > 0 {
-			data["favicon_content"] = string(iconBody)
-		}
-		for _, hash := range iconHashes {
-			hashes[hash] = struct{}{}
-		}
-		faviconData[iconURL] = iconHashes
-	}
-
-	if len(hashes) > 0 {
-		data["favicon_hash"] = strings.Join(sortedHashKeys(hashes), "\n")
-	}
-	if len(faviconData) > 0 {
-		data["favicon"] = faviconData
-	}
-}
-
 // cloneHeader 复制一份 http.Header（http.Header.Clone 是 go1.13 API，
 // 这里手写以保持 go1.11 兼容）。
 func cloneHeader(h http.Header) http.Header {
@@ -754,122 +662,6 @@ func cloneHeader(h http.Header) http.Header {
 		c[k] = append([]string(nil), v...)
 	}
 	return c
-}
-
-func (r *Request) fetchFavicon(baseReq *http.Request, iconURL string, client *http.Client) ([]byte, bool) {
-	iconReq, err := http.NewRequest(http.MethodGet, iconURL, nil)
-	if err != nil {
-		return nil, false
-	}
-	// Favicon fetch is a separate probe. Reusing the page request context makes
-	// the icon request inherit whatever time budget the page request already
-	// consumed, and often turns valid xray-style favicon rules into false
-	// negatives on slow sites.
-	iconReq = iconReq.WithContext(r.Context())
-	iconReq.Header = cloneHeader(baseReq.Header)
-	if iconReq.Header.Get("User-Agent") == "" {
-		iconReq.Header.Set("User-Agent", ua)
-	}
-	if client == nil {
-		client = r.httpClient
-	}
-	resp, err := client.Do(iconReq)
-	if err != nil {
-		return nil, false
-	}
-	body, err := readResponseBody(resp)
-	if err != nil || len(body) == 0 {
-		return nil, false
-	}
-	return body, true
-}
-
-func discoverIconURLs(base *url.URL, body string) []string {
-	seen := map[string]struct{}{}
-	var urls []string
-	add := func(raw string) {
-		raw = strings.TrimSpace(html.UnescapeString(raw))
-		if raw == "" {
-			return
-		}
-		ref, err := url.Parse(raw)
-		if err != nil {
-			return
-		}
-		resolved := base.ResolveReference(ref).String()
-		if _, ok := seen[resolved]; ok {
-			return
-		}
-		seen[resolved] = struct{}{}
-		urls = append(urls, resolved)
-	}
-
-	for _, tag := range linkTagRE.FindAllString(body, -1) {
-		rel := attrValue(tag, "rel")
-		if !strings.Contains(strings.ToLower(rel), "icon") {
-			continue
-		}
-		add(attrValue(tag, "href"))
-	}
-	add("favicon.ico")
-	add("/favicon.ico")
-	return urls
-}
-
-func attrValue(tag, name string) string {
-	for _, match := range attrRE.FindAllStringSubmatch(tag, -1) {
-		if len(match) >= 5 && strings.EqualFold(match[1], name) {
-			if match[2] != "" {
-				return match[2]
-			}
-			if match[3] != "" {
-				return match[3]
-			}
-			return match[4]
-		}
-	}
-	return ""
-}
-
-func xrayFaviconHash(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	encoded := base64.StdEncoding.EncodeToString(body)
-	var wrapped strings.Builder
-	for len(encoded) > 76 {
-		wrapped.WriteString(encoded[:76])
-		wrapped.WriteByte('\n')
-		encoded = encoded[76:]
-	}
-	wrapped.WriteString(encoded)
-	wrapped.WriteByte('\n')
-
-	hasher := murmur3.New32WithSeed(0)
-	_, _ = hasher.Write([]byte(wrapped.String()))
-	return fmt.Sprintf("%d", int32(hasher.Sum32()))
-}
-
-func faviconHashes(body []byte) []string {
-	if len(body) == 0 {
-		return nil
-	}
-	hashes := []string{}
-	if mmh3Hash := xrayFaviconHash(body); mmh3Hash != "" {
-		hashes = append(hashes, mmh3Hash)
-	}
-	md5Hash := md5.Sum(body)
-	hashes = append(hashes, fmt.Sprintf("%x", md5Hash))
-	return hashes
-}
-
-func sortedHashKeys(hashes map[string]struct{}) []string {
-	out := make([]string, 0, len(hashes))
-	for hash := range hashes {
-		out = append(out, hash)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func extractHTMLTitle(body string) string {
@@ -890,9 +682,7 @@ func checkRequestConditionExpressions(expressions ...string) bool {
 }
 
 var (
-	linkTagRE = regexp.MustCompile(`(?is)<link\b[^>]*>`)
-	attrRE    = regexp.MustCompile(`(?is)\b([a-z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>` + "`" + `]+))`)
-	titleRE   = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	titleRE = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
 
 // generatedRequest is a single wrapped generated request for a template request

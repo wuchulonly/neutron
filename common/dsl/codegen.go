@@ -154,8 +154,27 @@ func generateGrouped(child *Node, parentOp string, e Emitter, r *Result) string 
 }
 
 func genComparison(node *Node, e Emitter, r *Result) string {
-	left := unwrapFieldNode(node.Children[0])
+	rawLeft := node.Children[0]
+	left := unwrapFieldNode(rawLeft)
 	right := node.Children[1]
+
+	if isFaviconBodyHashCall(rawLeft) {
+		hash := resolveValue(right)
+		q, err := e.FaviconHash(hash)
+		if err != nil {
+			r.Errors = append(r.Errors, err.Error())
+			return ""
+		}
+		switch node.Op {
+		case "==":
+			return q
+		case "!=":
+			return e.Not(q)
+		default:
+			r.Warnings = append(r.Warnings, fmt.Sprintf("favicon hash operator %s approximated as equals", node.Op))
+			return q
+		}
+	}
 
 	if isStatusCodeVariable(left) {
 		if code, ok := toInt(right); ok {
@@ -202,6 +221,18 @@ func genComparison(node *Node, e Emitter, r *Result) string {
 	}
 }
 
+func isFaviconBodyHashCall(node *Node) bool {
+	if node == nil || node.Type != NodeCall || node.FuncName != "mmh3" || len(node.Children) != 1 {
+		return false
+	}
+	child := node.Children[0]
+	if child == nil || child.Type != NodeCall || child.FuncName != "base64_py" || len(child.Children) != 1 {
+		return false
+	}
+	part, ok := variableName(child.Children[0])
+	return ok && NormalizePart(part) == "body"
+}
+
 func genCall(node *Node, e Emitter, r *Result) string {
 	switch node.FuncName {
 	case "contains":
@@ -216,8 +247,6 @@ func genCall(node *Node, e Emitter, r *Result) string {
 	case "ends_with":
 		r.Warnings = append(r.Warnings, "ends_with approximated as contains")
 		return genContains(node, e, r)
-	case "favicon_hash":
-		return genFaviconHash(node, e, r)
 	default:
 		r.Errors = append(r.Errors, fmt.Sprintf("unsupported function: %s", node.FuncName))
 		return ""
@@ -232,14 +261,6 @@ func genContains(node *Node, e Emitter, r *Result) string {
 	fieldNode := unwrapFieldNode(node.Children[0])
 	if fieldNode.Type == NodeVariable {
 		part := NormalizePart(fieldNode.Value.(string))
-		if part == "favicon_hash" || part == "body_favicon_hash" {
-			q, err := e.FaviconHash(resolveValue(node.Children[1]))
-			if err != nil {
-				r.Errors = append(r.Errors, err.Error())
-				return ""
-			}
-			return q
-		}
 		if isHeaderVariable(part, e) {
 			needle := headerNeedle(part, resolveValue(node.Children[1]))
 			return e.Contains(e.Field("all_headers"), needle)
@@ -272,20 +293,6 @@ func genContainsMulti(node *Node, e Emitter, r *Result, isAll bool) string {
 		return e.Group(e.And(clauses...))
 	}
 	return e.Group(e.Or(clauses...))
-}
-
-func genFaviconHash(node *Node, e Emitter, r *Result) string {
-	if len(node.Children) < 1 {
-		r.Errors = append(r.Errors, "favicon_hash requires 1 arg")
-		return ""
-	}
-	hash := resolveValue(node.Children[0])
-	q, err := e.FaviconHash(hash)
-	if err != nil {
-		r.Errors = append(r.Errors, err.Error())
-		return ""
-	}
-	return q
 }
 
 func resolveField(node *Node, e Emitter) string {

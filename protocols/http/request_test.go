@@ -1,12 +1,10 @@
 package http
 
 import (
-	"context"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +32,7 @@ func TestResponseToDSLMap(t *testing.T) {
 	require.NoError(t, err)
 
 	r := &Request{}
-	event := r.responseToDSLMap(req, resp, server.URL, server.URL+"/path", 100*time.Millisecond, nil, nil, nil)
+	event := r.responseToDSLMap(req, resp, server.URL, server.URL+"/path", 100*time.Millisecond, nil, nil)
 
 	require.Equal(t, 200, event["status_code"])
 	require.Equal(t, "test body", event["body"])
@@ -67,7 +65,7 @@ func TestResponseToDSLMapAllHeadersIncludesRawAndNormalizedHeaders(t *testing.T)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 
-	event := (&Request{}).responseToDSLMap(req, resp, server.URL, server.URL+"/", time.Millisecond, nil, nil, nil)
+	event := (&Request{}).responseToDSLMap(req, resp, server.URL, server.URL+"/", time.Millisecond, nil, nil)
 
 	require.Contains(t, event["header"], "X-Jenkins: 2.440")
 	require.Contains(t, event["all_headers"], "X-Jenkins: 2.440")
@@ -77,60 +75,8 @@ func TestResponseToDSLMapAllHeadersIncludesRawAndNormalizedHeaders(t *testing.T)
 	require.Equal(t, "application/json", event["content_type"])
 }
 
-func TestFetchFaviconUsesFreshRequestContext(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/favicon.ico" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		_, _ = w.Write([]byte("icon"))
-	}))
-	defer server.Close()
-
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
-	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	req = req.WithContext(ctx)
-
-	request := &Request{
-		options: &protocols.ExecuterOptions{Options: &protocols.Options{Timeout: 5}},
-	}
-	body, ok := request.fetchFavicon(req, server.URL+"/favicon.ico", server.Client())
-	require.True(t, ok)
-	require.Equal(t, []byte("icon"), body)
-}
-
-func TestDiscoverIconURLsSupportsUnquotedAttrs(t *testing.T) {
-	base, err := url.Parse("http://example.test/systemcenter/index.html")
-	require.NoError(t, err)
-
-	urls := discoverIconURLs(base, `<html><head><link rel=icon href=/systemcenter/static/favicon.ico></head></html>`)
-
-	require.Contains(t, urls, "http://example.test/systemcenter/static/favicon.ico")
-}
-
-func TestDiscoverIconURLsFallbackIncludesCurrentDirectoryAndRoot(t *testing.T) {
-	base, err := url.Parse("http://example.test/portal/")
-	require.NoError(t, err)
-
-	urls := discoverIconURLs(base, `<html><head></head><body></body></html>`)
-
-	require.Contains(t, urls, "http://example.test/portal/favicon.ico")
-	require.Contains(t, urls, "http://example.test/favicon.ico")
-}
-
-func TestDiscoverIconURLsFallbackDedupesRootPath(t *testing.T) {
-	base, err := url.Parse("http://example.test/")
-	require.NoError(t, err)
-
-	urls := discoverIconURLs(base, `<html><head></head><body></body></html>`)
-
-	require.Equal(t, []string{"http://example.test/favicon.ico"}, urls)
-}
-
-func TestResponseToDSLMapUsesFinalRedirectURLForFaviconDiscovery(t *testing.T) {
-	iconBody := []byte("redirected-icon")
+func TestResponseToDSLMapDoesNotExposeFaviconRuntimeFields(t *testing.T) {
+	var fetchedIcon bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/start":
@@ -138,7 +84,8 @@ func TestResponseToDSLMapUsesFinalRedirectURLForFaviconDiscovery(t *testing.T) {
 		case "/app/index.html":
 			fmt.Fprint(w, `<html><head><link rel=icon href=static/favicon.ico></head></html>`)
 		case "/app/static/favicon.ico":
-			_, _ = w.Write(iconBody)
+			fetchedIcon = true
+			_, _ = w.Write([]byte("redirected-icon"))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -151,17 +98,15 @@ func TestResponseToDSLMapUsesFinalRedirectURLForFaviconDiscovery(t *testing.T) {
 	require.NoError(t, err)
 
 	request := &Request{
-		Operators: operators.Operators{
-			Matchers: []*operators.Matcher{{Type: "favicon", Hash: []string{xrayFaviconHash(iconBody)}}},
-		},
 		options: &protocols.ExecuterOptions{Options: &protocols.Options{Timeout: 5}},
 	}
-	event := request.responseToDSLMap(req, resp, server.URL, server.URL+"/app/index.html", 100*time.Millisecond, nil, nil, server.Client())
+	event := request.responseToDSLMap(req, resp, server.URL, server.URL+"/app/index.html", 100*time.Millisecond, nil, nil)
 
-	faviconData, ok := event["favicon"].(map[string]interface{})
-	require.True(t, ok)
-	require.Contains(t, faviconData, server.URL+"/app/static/favicon.ico")
-	require.Contains(t, event["favicon_hash"], xrayFaviconHash(iconBody))
+	require.NotContains(t, event, "favicon")
+	require.NotContains(t, event, "favicon_content")
+	require.NotContains(t, event, "favicon_hash")
+	require.NotContains(t, event, "body_favicon_hash")
+	require.False(t, fetchedIcon)
 }
 
 func TestResponseToDSLMapWithRequestBody(t *testing.T) {
@@ -180,7 +125,7 @@ func TestResponseToDSLMapWithRequestBody(t *testing.T) {
 	require.NoError(t, err)
 
 	r := &Request{}
-	event := r.responseToDSLMap(req, resp, server.URL, server.URL+"/api", 100*time.Millisecond, nil, reqBody, nil)
+	event := r.responseToDSLMap(req, resp, server.URL, server.URL+"/api", 100*time.Millisecond, nil, reqBody)
 
 	// Verify request string includes the body
 	reqStr := common.ToString(event["request"])
@@ -427,6 +372,63 @@ func TestCookieJarIsSharedAcrossRequestBlocksByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, checkSawCookie)
 	require.True(t, matched)
+}
+
+func TestDisableCookiePreventsRawSequenceCookieReplay(t *testing.T) {
+	var secondSawCookie bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/whoAmI/":
+			http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "from-server", Path: "/"})
+			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("X-Jenkins", "2.440")
+			if _, err := r.Cookie("JSESSIONID"); err == nil {
+				secondSawCookie = true
+				fmt.Fprint(w, "Cookie JSESSIONID SessionId: null")
+				return
+			}
+			fmt.Fprint(w, "SessionId: null")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	r := &Request{
+		Raw: []string{
+			"GET /whoAmI/ HTTP/1.1\r\nHost: {{Hostname}}\r\n\r\n",
+			"GET /whoAmI/ HTTP/1.1\r\nHost: {{Hostname}}\r\n\r\n",
+		},
+		DisableCookie: true,
+		Operators:     operators.Operators{MatchersCondition: "and"},
+	}
+	r.Matchers = append(r.Matchers, &operators.Matcher{
+		Type:      "word",
+		Part:      "header",
+		Words:     []string{"text/html", "x-jenkins"},
+		Condition: "and",
+	})
+	r.Matchers = append(r.Matchers, &operators.Matcher{
+		Type:      "word",
+		Part:      "body_2",
+		Words:     []string{"Cookie", "SessionId: null"},
+		Condition: "and",
+	})
+	r.Matchers = append(r.Matchers, &operators.Matcher{
+		Type:   "status",
+		Status: []int{200},
+	})
+	require.NoError(t, r.Compile(&protocols.ExecuterOptions{Options: &protocols.Options{Timeout: 5}}))
+
+	var matched bool
+	err := r.ExecuteWithResults(protocols.NewScanContext(server.URL, nil), map[string]interface{}{}, map[string]interface{}{}, func(event *protocols.InternalWrappedEvent) {
+		if event.OperatorsResult != nil {
+			matched = event.OperatorsResult.Matched
+		}
+	})
+	require.NoError(t, err)
+	require.False(t, secondSawCookie)
+	require.False(t, matched)
 }
 
 func TestDisableCookiePreventsSharingAcrossRequestBlocks(t *testing.T) {

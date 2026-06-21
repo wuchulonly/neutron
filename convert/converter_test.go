@@ -200,28 +200,10 @@ func TestExprToMatchers(t *testing.T) {
 			},
 		},
 		{
-			"favicon_hash", `faviconHash(response.getIconContent()) == -297069493`, 1, "or",
-			func(t *testing.T, r *ConvertResult) {
-				m := r.Matchers[0]
-				if m.Type != "favicon" || m.Part != "favicon_hash" || m.Hash[0] != "-297069493" {
-					t.Errorf("got %+v", m)
-				}
-			},
-		},
-		{
-			"mmh3_favicon_content", `mmh3(response.getIconContent()) == -297069493`, 1, "or",
-			func(t *testing.T, r *ConvertResult) {
-				m := r.Matchers[0]
-				if m.Type != "favicon" || m.Part != "favicon_hash" || m.Hash[0] != "-297069493" {
-					t.Errorf("got %+v", m)
-				}
-			},
-		},
-		{
 			"body_favicon_hash", `faviconHash(response.body) == 123`, 1, "or",
 			func(t *testing.T, r *ConvertResult) {
 				m := r.Matchers[0]
-				if m.Type != "favicon" || m.Part != "body_favicon_hash" || m.Hash[0] != "123" {
+				if m.Type != "dsl" || m.DSL[0] != `(mmh3(base64_py(body)) == "123")` {
 					t.Errorf("got %+v", m)
 				}
 			},
@@ -254,6 +236,32 @@ func TestExprToMatchers(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, r)
+			}
+		})
+	}
+}
+
+func TestExprToMatchersForFaviconBody(t *testing.T) {
+	tests := []struct {
+		name string
+		expr string
+		want string
+	}{
+		{"favicon_hash", `faviconHash(response.getIconContent()) == -297069493`, `(mmh3(base64_py(body)) == "-297069493")`},
+		{"mmh3_favicon_content", `mmh3(response.getIconContent()) == -297069493`, `(mmh3(base64_py(body)) == "-297069493")`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, err := ExprToMatchersForFaviconBody(tt.expr)
+			if err != nil {
+				t.Fatalf("convert: %v", err)
+			}
+			if len(r.Matchers) != 1 {
+				t.Fatalf("count: got %d want 1", len(r.Matchers))
+			}
+			m := r.Matchers[0]
+			if m.Type != "dsl" || m.DSL[0] != tt.want {
+				t.Fatalf("got %+v want DSL %q", m, tt.want)
 			}
 		})
 	}
@@ -328,6 +336,61 @@ func TestExprToMatchersRejectsTernary(t *testing.T) {
 	}
 }
 
+func TestConvertBodyFaviconHashUsesBodyDSL(t *testing.T) {
+	xrayYAML := `
+name: body-favicon-hash
+transport: http
+rules:
+  r0:
+    request:
+      method: GET
+      path: /favicon.ico
+    expression: faviconHash(response.body) == 733091897
+expression: r0()
+`
+	out, err := Convert([]byte(xrayYAML))
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `mmh3(base64_py(body)) == "733091897"`) {
+		t.Fatalf("missing body hash DSL:\n%s", s)
+	}
+	if strings.Contains(s, "body_favicon_hash") || strings.Contains(s, "type: favicon") {
+		t.Fatalf("runtime favicon matcher leaked:\n%s", s)
+	}
+}
+
+func TestConvertReqConditionBodyFaviconHashUsesHistoryBodyDSL(t *testing.T) {
+	xrayYAML := `
+name: body-favicon-hash-req-condition
+transport: http
+rules:
+  r0:
+    request:
+      method: GET
+      path: /favicon.png
+    expression: faviconHash(response.body) == 733091897
+  r1:
+    request:
+      method: GET
+      path: /api/v1/system/config/authorizer
+    expression: response.body_string.contains("org.openmetadata.service.security.")
+expression: r0() && r1()
+`
+	out, err := Convert([]byte(xrayYAML))
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `mmh3(base64_py(body_1)) == "733091897"`) {
+		t.Fatalf("missing history body hash DSL:\n%s", s)
+	}
+	if strings.Contains(s, "body_favicon_hash") || strings.Contains(s, "type: favicon") {
+		t.Fatalf("runtime favicon field leaked:\n%s", s)
+	}
+}
+
 func TestConvert(t *testing.T) {
 	xrayYAML := `
 name: fingerprint-apache--tomcat
@@ -372,8 +435,11 @@ expression: kw_in_home() || kw_in_server() || favicon_hash()
 	if !strings.Contains(s, "type: word") {
 		t.Error("missing word matcher")
 	}
-	if !strings.Contains(s, "type: favicon") {
-		t.Error("missing favicon matcher")
+	if !strings.Contains(s, "{{BaseURL}}/favicon.ico") {
+		t.Error("missing explicit favicon request")
+	}
+	if !strings.Contains(s, `mmh3(base64_py(body)) == "-297069493"`) {
+		t.Error("missing nuclei-style favicon hash DSL")
 	}
 	if !strings.Contains(s, "condition: and") {
 		t.Error("missing and condition for kw_in_home words")
